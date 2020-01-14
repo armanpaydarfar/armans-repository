@@ -1,0 +1,399 @@
+#!/usr/bin/env python
+
+import numpy
+import random
+import sys
+
+import geometry_msgs.msg
+import moveit_msgs.msg
+import moveit_msgs.srv
+import rospy
+import tf
+import moveit_commander
+from urdf_parser_py.urdf import URDF
+from std_msgs.msg import String
+from sensor_msgs.msg import JointState
+from geometry_msgs.msg import Transform
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+def convert_to_message(T):
+    t = geometry_msgs.msg.Pose()
+    position = tf.transformations.translation_from_matrix(T)
+    orientation = tf.transformations.quaternion_from_matrix(T)
+    t.position.x = position[0]
+    t.position.y = position[1]
+    t.position.z = position[2]
+    t.orientation.x = orientation[0]
+    t.orientation.y = orientation[1]
+    t.orientation.z = orientation[2]
+    t.orientation.w = orientation[3]        
+    return t
+
+class MoveArm(object):
+
+    def __init__(self):
+
+        #Loads the robot model, which contains the robot's kinematics information
+	self.num_joints = 0
+        self.joint_names = []
+        self.joint_axes = []
+        self.robot = URDF.from_parameter_server()
+        self.base = self.robot.get_root()
+        self.get_joint_info()
+
+        # Wait for moveit IK service
+        rospy.wait_for_service("compute_ik")
+        self.ik_service = rospy.ServiceProxy('compute_ik',  moveit_msgs.srv.GetPositionIK)
+        print "IK service ready"
+
+        # Wait for validity check service
+        rospy.wait_for_service("check_state_validity")
+        self.state_valid_service = rospy.ServiceProxy('check_state_validity',  
+                                                      moveit_msgs.srv.GetStateValidity)
+        print "State validity service ready"
+
+        # MoveIt parameter
+        robot_moveit = moveit_commander.RobotCommander()
+        self.group_name = robot_moveit.get_group_names()[0]
+
+	#Subscribe to topics
+	rospy.Subscriber('/joint_states', JointState, self.get_joint_state)
+	rospy.Subscriber('/motion_planning_goal', Transform, self.motion_planning)
+        self.current_obstacle = "None"
+        rospy.Subscriber('/obstacle', String, self.get_obstacle)
+
+	#Set up publisher
+	self.pub = rospy.Publisher('/joint_trajectory', JointTrajectory, queue_size=10)
+
+    '''This callback provides you with the current joint positions of the robot 
+     in member variable q_current.'''
+    def get_joint_state(self, msg):
+        self.q_current = []
+        for name in self.joint_names:
+            self.q_current.append(msg.position[msg.name.index(name)])
+
+    '''This callback provides you with the name of the current obstacle which
+    exists in the RVIZ environment. Options are "None", "Simple", "Hard",
+    or "Super". '''
+    def get_obstacle(self, msg):
+        self.current_obstacle = msg.data
+
+    '''This is the callback which will implement your RRT motion planning.
+    You are welcome to add other functions to this class (i.e. an
+    "is_segment_valid" function will likely come in handy multiple times 
+    in the motion planning process and it will be easiest to make this a 
+    seperate function and then call it from motion planning). You may also
+    create trajectory shortcut and trajectory sample functions if you wish, 
+    which will also be called from the motion planning function.'''    
+    def motion_planning(self, ee_goal):
+        print "Starting motion planning"
+	########INSERT YOUR RRT MOTION PLANNING HERE##########
+        trajectory=[]
+        list_=[]
+        tree=[]
+        list1=[]
+        list2=[]
+        list3=[]
+        q_c= self.q_current
+        #print(q_c)
+        
+        #print(validtest)
+        ee_quaternion = [ee_goal.rotation.x,ee_goal.rotation.y,ee_goal.rotation.z,ee_goal.rotation.w]
+                
+        ee_matrix = tf.transformations.quaternion_matrix(ee_quaternion)
+        ee_matrix[0][3] = ee_goal.translation.x
+        ee_matrix[1][3] = ee_goal.translation.y
+        ee_matrix[2][3] = ee_goal.translation.z
+        i = 1
+        q_desired = self.IK(ee_matrix)
+        
+        
+        goalreached = False
+        tree= [RRTBranch([],q_c)]
+        
+        while not goalreached:
+            
+            
+            distvector =numpy.zeros(i,)
+            nextplace = numpy.pi*2*numpy.random.rand(1,self.num_joints) -  numpy.pi
+            nextplace= numpy.ravel(nextplace)
+            i = len(tree)
+            
+            for j in range(0,i): 
+                distvector[j] = numpy.linalg.norm(numpy.subtract(nextplace,tree[j].q))
+            
+            
+            min_index = numpy.where(distvector == distvector.min())
+            
+            min_index= numpy.asscalar(min_index[0])
+            
+            next_dir =numpy.subtract(nextplace,tree[min_index].q)         
+            
+            norm = numpy.linalg.norm(next_dir)
+            
+            next_dist = numpy.divide(next_dir,norm*2)
+            
+            nextpoint =  numpy.add(tree[min_index].q,next_dist)
+            
+            next_parent = tree[min_index]
+            #print('next parent',next_parent)
+            branch = RRTBranch(next_parent,nextpoint)
+            
+            boole = self.is_segment_valid(next_parent.q,nextpoint)   
+            #print('new point',boole)
+            
+            
+            if self.is_segment_valid(next_parent.q,nextpoint):            
+                tree.append(branch)
+                i = len(tree)
+                #print(i)
+            else:
+                continue
+            
+            boolean = self.is_segment_valid(tree[-1].q,q_desired)
+            #print('check line of sight',boolean)
+            
+            if boolean:
+                last_command = RRTBranch(tree[-1],q_desired)
+                tree.append(last_command)
+                goalreached = True
+            else:
+                continue
+            
+       
+       
+        #print('last tree',tree[-1].q)
+        #print('last branch parent',tree[-1].parent.q)
+        #print('last branch grandparent', tree[-1].parent.parent.q)
+             
+       
+        list_ = self.assemble_list([],tree[-1]) 
+        #print('returned list',list_)
+        #print('assembled',list_)
+        list1 = self.shortcut_list(list_)
+        #print('shortcut',list1)
+        list2 = self.resample(list1)
+        #print('resampled',list2)
+        
+        
+        list3 = []
+        
+        
+        
+        trajectory = JointTrajectory()
+        
+        
+        
+        
+        trajectory.joint_names = self.joint_names
+        
+        for j in range(0,len(list2)):
+            points = JointTrajectoryPoint()
+            points.positions = numpy.zeros(self.num_joints,)  
+            list3.append(points)
+            list3[j].positions=list2[j]
+            
+      
+        
+        trajectory.points = list3
+        
+        
+        
+        self.pub.publish(trajectory)
+        
+        
+       
+        
+    
+
+    def assemble_list(self,list_,treeOBJ):
+        
+        
+        if treeOBJ.parent == []:
+            #print('current_list',list_)  
+            list_ = list(reversed(list_))
+            return list_         
+        
+           
+        list_.append(treeOBJ.q)    
+        next_treeobject = treeOBJ.parent
+        return self.assemble_list(list_,next_treeobject)
+                
+
+        
+        
+        
+        
+        
+ 
+    
+    def is_segment_valid(self,q,q_desired):
+        test = []
+      
+        #print('q',q)
+        #print('q_desired',q_desired)
+        diff_vector = numpy.subtract(q_desired,q)
+        
+        #print('q_desired should be equal',q+numpy.divide(diff_vector,numpy.linalg.norm(diff_vector)))
+        mag = numpy.linalg.norm(diff_vector)
+        test.append(q)
+        
+        goalmet = True
+        
+        while goalmet:
+            if numpy.linalg.norm(numpy.subtract(q_desired,test[-1])) < 0.05:
+                goalmet = False
+            else:
+                testval  = test[-1] + 0.05*numpy.divide(diff_vector,mag)  
+                
+            test.append(testval)
+            boolean = self.is_state_valid(test[-1])
+            
+            if boolean:
+                continue
+            else:
+                bool_ = False
+                break
+       
+        if boolean == True and goalmet == False:
+            bool_=True
+            
+        
+        return bool_
+        
+    def shortcut_list(self,list_):
+        list1=[]
+        list1.append(list_[0])
+        
+        for i in range(1,len(list_)):
+            boolean = self.is_segment_valid(list_[i],list1[-1])
+            
+            if not boolean:
+                list1.append(list_[i-1])
+               
+            else:
+                continue
+            
+        list1.append(list_[-1])
+        
+        if numpy.array_equal(list1[0],list1[1]):
+            list1 = list1[1:]
+        
+        
+        list1 = list(list1)
+       
+        return list1
+        
+        
+        
+        
+    def resample(self,list_):
+        list1 = []
+        list1.append(list_[0])
+        i = 1
+        appendfunc = True
+        while appendfunc == True:
+                           
+            if numpy.array_equal(list_[-1],list1[-1]):
+                appendfunc = False
+                break
+               
+               
+            diff = numpy.subtract(list_[i],list_[i-1])
+            mag = numpy.linalg.norm(diff)
+            newpoint = numpy.add(list1[-1],0.05*numpy.divide(diff,mag))
+            list1.append(newpoint)
+               
+            if numpy.linalg.norm(numpy.subtract(newpoint,list_[i])) < 0.3:
+                list1.append(list_[i])   
+                i = i+1
+           
+        
+        return list1
+                
+                 
+                
+            
+                 
+           
+           
+        ######################################################
+
+    """ This function will perform IK for a given transform T of the end-effector.
+    It returns a list q[] of values, which are the result positions for the 
+    joints of the robot arm, ordered from proximal to distal. If no IK solution 
+    is found, it returns an empy list.
+    """
+    def IK(self, T_goal):
+        req = moveit_msgs.srv.GetPositionIKRequest()
+        req.ik_request.group_name = self.group_name
+        req.ik_request.robot_state = moveit_msgs.msg.RobotState()
+        req.ik_request.robot_state.joint_state.name = self.joint_names
+        req.ik_request.robot_state.joint_state.position = numpy.zeros(self.num_joints)
+        req.ik_request.robot_state.joint_state.velocity = numpy.zeros(self.num_joints)
+        req.ik_request.robot_state.joint_state.effort = numpy.zeros(self.num_joints)
+        req.ik_request.robot_state.joint_state.header.stamp = rospy.get_rostime()
+        req.ik_request.avoid_collisions = True
+        req.ik_request.pose_stamped = geometry_msgs.msg.PoseStamped()
+        req.ik_request.pose_stamped.header.frame_id = self.base
+        req.ik_request.pose_stamped.header.stamp = rospy.get_rostime()
+        req.ik_request.pose_stamped.pose = convert_to_message(T_goal)
+        req.ik_request.timeout = rospy.Duration(3.0)
+        res = self.ik_service(req)
+        q = []
+        if res.error_code.val == res.error_code.SUCCESS:
+            q = res.solution.joint_state.position
+        return q
+
+    '''This is a function which will collect information about the robot which
+       has been loaded from the parameter server. It will populate the variables
+       self.num_joints (the number of joints), self.joint_names and
+       self.joint_axes (the axes around which the joints rotate)'''
+    def get_joint_info(self):
+        link = self.robot.get_root()
+        while True:
+            if link not in self.robot.child_map: break
+            (joint_name, next_link) = self.robot.child_map[link][0]
+            current_joint = self.robot.joint_map[joint_name]
+            if current_joint.type != 'fixed':
+                self.num_joints = self.num_joints + 1
+                self.joint_names.append(current_joint.name)
+                self.joint_axes.append(current_joint.axis)
+            link = next_link
+
+
+    """ This function checks if a set of joint angles q[] creates a valid state,
+    or one that is free of collisions. The values in q[] are assumed to be values
+    for the joints of the KUKA arm, ordered from proximal to distal. 
+    """
+    def is_state_valid(self, q):
+        req = moveit_msgs.srv.GetStateValidityRequest()
+        req.group_name = self.group_name
+        req.robot_state = moveit_msgs.msg.RobotState()
+        req.robot_state.joint_state.name = self.joint_names
+        req.robot_state.joint_state.position = q
+        req.robot_state.joint_state.velocity = numpy.zeros(self.num_joints)
+        req.robot_state.joint_state.effort = numpy.zeros(self.num_joints)
+        req.robot_state.joint_state.header.stamp = rospy.get_rostime()
+        res = self.state_valid_service(req)
+        return res.valid
+
+
+'''This is a class which you can use to keep track of your tree branches.
+It is easiest to do this by appending instances of this class to a list 
+(your 'tree'). The class has a parent field and a joint position field (q). 
+You can initialize a new branch like this:
+RRTBranch(parent, q)
+Feel free to keep track of your branches in whatever way you want - this
+is just one of many options available to you.'''
+class RRTBranch(object):
+    def __init__(self, parent, q):
+	self.parent = parent
+	self.q = q
+
+
+if __name__ == '__main__':
+    moveit_commander.roscpp_initialize(sys.argv)
+    rospy.init_node('move_arm', anonymous=True)
+    ma = MoveArm()
+    rospy.spin()
