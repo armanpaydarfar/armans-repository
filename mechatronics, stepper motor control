@@ -1,0 +1,438 @@
+#include <xc.h>
+#include <pic.h>
+#pragma config  FOSC=HS, CP=OFF, DEBUG=OFF, BORV=20, BOREN=0, MCLRE=ON, PWRTE=ON, WDTE=OFF
+#pragma config  BORSEN=OFF, IESO=OFF, FCMEN=0
+#define PORTBIT(adr,bit)((unsigned)(&adr)*8+(bit))
+#define UHOME 4
+#define UBOT 5
+#define BHOME 7
+#define BBOT 6
+
+// define all variables
+
+unsigned int Count; 
+unsigned char UniStep;
+unsigned char BiStep;
+
+static bit greenButton @ PORTBIT(PORTC,0);
+static bit redButton @ PORTBIT(PORTC,1);
+static bit OctalSwitch0 @ PORTBIT(PORTE,0);
+static bit OctalSwitch1 @ PORTBIT(PORTE,1);
+static bit OctalSwitch2 @ PORTBIT(PORTE,2);
+static bit UniHome @ PORTBIT(PORTB,4);
+static bit UniBot @ PORTBIT(PORTB,5);
+static bit BiBot @ PORTBIT(PORTB,6);
+static bit BiHome @ PORTBIT(PORTB,7);
+
+
+//clears LEDs
+void ClearLed(void)
+{
+	RB0 = 0;
+	RB1 = 0;
+	RB2 = 0;
+	RB3 = 0;
+}
+
+//error function, does not return from here. Turns on an LED as well. MUST RESET
+
+void Error(void)
+{
+	RB3 = 1;
+	while(2!=1){}
+}
+
+
+//this delay is called each time the stepper motor is turned
+
+void delay(void)
+{
+	for (int Timer = 10000; Timer > 0; Timer--) {} // 1s delay loop
+}
+
+void SwitchDelay(void) // Waits for switch debounce
+{
+	for (int i=200; i > 0; i--) {} // 1200 us delay
+}
+
+//function below was used for debugging only
+
+void moveUnipolarClock(void)
+{
+	while(1!=2)
+	{
+		if(UniHome){break;}
+		delay();
+		PORTD = 0B00000001;
+		if(UniHome){break;}
+		delay();
+		PORTD = 0B00001000;
+		if(UniHome){break;}
+		delay();
+		PORTD = 0B00000100;
+		if(UniHome){break;}
+		delay();
+		PORTD = 0B00000010;
+	}
+}
+
+//changes unipolar motor by one step
+
+void ChangeUni(int a)
+{
+	unsigned char step[6] = {0B00001001,0B00000011,0B00000110,0B00001100,0B00001001,0B00000011};
+	for(int i = 1; i < 5; i++)
+	{
+		if(UniStep == step[i])
+		{
+			if(a == 0)
+				UniStep = step[i+1];
+			else
+				UniStep = step[i-1];
+			break;
+		}
+	}
+}
+
+
+
+//changes bipolar motor by one step in selected direction
+
+void ChangeBi(int a)
+{
+	unsigned char step[6] = {0B01000000,0B00000000,0B00010000,0B01010000,0B01000000,0B00000000};
+	for(int i = 1; i < 5; i++)
+	{
+		if(BiStep == step[i])
+		{
+			if(a == 0)
+				BiStep = step[i+1];
+			else
+				BiStep = step[i-1];
+			break;
+		}
+	}
+}
+
+//moves motors, makes use of changebi and changeuni
+int move(int UniEnd, int BiEnd, int UniClock, int BiClock)
+{
+	if(UniEnd == 0)
+	{
+		if(BiEnd == 0)
+		{
+			while(2!=1)
+			{
+				if(UniHome == 1&&(BiHome == 1))
+					return 0;
+				else
+				{
+					if(UniHome == 0)
+						ChangeUni(UniClock);
+					if(BiHome == 0)
+						ChangeBi(BiClock);	
+					PORTD = UniStep + BiStep;
+					delay();
+				}		
+			}
+		}
+		
+		else
+		{
+			while(2!=1)
+			{
+				if(UniHome == 1&&(BiBot == 1))
+					return 0;
+				else
+				{
+					if(UniHome == 0)
+						ChangeUni(UniClock);
+					if(BiBot == 0)
+						ChangeBi(BiClock);	
+					PORTD = UniStep + BiStep;
+					delay();
+				}	
+			}
+		}
+	}
+	
+	else
+	{
+		if(BiEnd == 0)
+		{
+			while(2!=1)
+			{
+				if(UniBot == 1&&(BiHome == 1))
+					return 0;
+				else
+				{
+					if(UniBot == 0)
+						ChangeUni(UniClock);
+		 			if(BiHome == 0)
+						ChangeBi(BiClock);	
+					PORTD = UniStep + BiStep;
+					delay();
+				}	
+
+				
+			}
+		}
+		
+		else
+		{
+			while(2!=1)
+			{
+				if(UniBot == 1&&(BiBot == 1))
+					return 0;
+				else
+				{
+					if(UniBot == 0)
+						ChangeUni(UniClock);
+					if(BiBot == 0)
+						ChangeBi(BiClock);	
+					PORTD = UniStep + BiStep;
+					delay();
+				}		
+			}
+		}
+	}	
+}
+
+//initializer
+void Init(void)
+{
+	PORTB = 0b00000000; // Clear Port B
+	PORTC = 0b00000000; // Clear Port C
+	PORTD = 0b00000000;//Clear Port D
+	PORTE = 0b00000000; // Clear Port E
+	
+	ADCON1 = 0b1111;
+	//ADCON1 = 0b00001111;
+	//ADCON0 = 0b01000000;
+	// configure Port B: higher four bits are for interupter indicating, 4-UniUp 5-UniDown 6-BiDown 7-BiUp
+	// lower four bits are used to display the State of the program 1- 2- 3- 4-
+	TRISB = 0b11110000; 
+	
+	// configure Port C: 0-green button 1-redbutton
+	TRISC = 0b00000011; 
+	
+	// configure Port D as all outputs; 0-3:unipolar 4-7:bipolar
+	TRISD = 0b00000000; 
+	
+	// configure Port E: Octal Switch
+	TRISE = 0b00000111; 
+	
+	//debug 1 initial every global variable in Init
+	
+
+	PORTD = 0b00000000;//Clear Port D again
+	
+	BiStep = 0b00000000;
+	UniStep = 0b00000011;
+	Count = 0;
+}
+
+
+//synchronizes to home position
+
+void Synchronize(void)
+{
+	move(0,0,1,1);
+}
+
+
+
+//reads mode and switches to it
+void ReadMode(void)
+{
+	while(2!=1)
+	{
+		while(greenButton == 1){} // Wait for release
+		SwitchDelay();
+		switch (ReadOctal())
+		{
+			case 1: 
+				mode1();
+				break;
+			case 2: Error();
+			case 3: 
+				mode3();
+				break;
+			case 4: Error();
+			case 5: Error();
+		}
+		ClearLed();	
+	}	
+}
+
+
+
+//reads octal switch. checks each bit, and uses tree logic 
+
+int ReadOctal(void)
+{
+	int mode;
+	
+	if(OctalSwitch2 == 1)//1xx
+	{
+		if(OctalSwitch1 == 1)//11x
+		{
+			if(OctalSwitch0 == 1)   //111
+				mode = 5;
+			else                    //110
+				mode = 1;
+		}
+		else//10x
+		{
+			if(OctalSwitch0 == 1)   //101
+				mode = 2;
+			else                    //100
+				mode = 3;
+		}
+	}
+	
+	else//0xx
+	{
+		if(OctalSwitch1 == 1)//01x
+		{
+			if(OctalSwitch0 == 1)   //011
+				mode = 4;
+			else                    //010
+				mode = 5;
+		}
+		else//00x
+		{
+			if(OctalSwitch0 == 1)   //001
+				mode = 5;
+			else                    //000
+				mode = 5;
+		}
+	}
+	
+	return mode;
+}
+
+
+
+
+//mode 1, 4 cases include moving each motor clockwise or counter clockwise
+	
+int mode1(void)
+{
+	RB0 = 1;
+	while(2!=1)
+	{	
+		if(greenButton == 1)
+			return 0;
+		if(redButton == 1)
+		{
+			while(redButton == 1){}//if red button is released jump out of the loop
+			SwitchDelay();//wait for a little while
+			//alternate mocing a motor to opposite interrupter
+			switch (Count%4)
+			{
+				case 0: 
+				{
+					move(1,0,1,1);
+					Count++;
+					continue;
+				}
+				case 1: 
+				{
+					move(1,1,1,0);
+					Count++;
+					continue;
+				}
+				case 2: 
+				{
+					move(0,1,0,0);
+					Count++;
+					continue;
+				}
+				case 3: 
+				{
+					move(0,0,0,1);
+					Count++;
+					continue;
+				}
+			}
+		}
+	}
+}
+
+
+
+//mode 3, moves both motors the "long" way until red button is held down near home position
+
+int mode3(void)
+{
+	RB0 = 1;
+	RB1 = 1;
+	move(1,0,1,1);
+	while(2!=1)
+	{
+		if(greenButton == 1) // If green press
+			return 0;
+		else
+		{
+			if(redButton == 1)
+			{
+				while(redButton == 1){}
+				SwitchDelay();	
+				
+				while(2!=1)
+				{
+					if(redButton == 1 && (UniBot == 1)&&(BiHome == 1))
+					{
+						while(redButton == 1){}//red release
+						SwitchDelay();
+						if(redButton == 0)
+							break;
+					}
+					move(0,1,1,1);
+					move(1,0,0,0);
+				}
+			}	
+		}	
+	}
+}
+
+
+
+//checks if the motors are home
+
+int HomeCheck(void)
+{
+	if(UniHome == 1 && (BiHome == 1))
+		return 1;
+	return 0;
+}
+
+
+
+
+
+
+
+
+//runs main function
+
+
+void main(void) 
+{
+	Init();
+	//moveUnipolarClock();
+
+	Synchronize();
+	
+	while(2!=1)
+	{
+		if(greenButton == 1) // If green press
+		{
+			//while(greenButton == 1){} // Wait for release
+			//SwitchDelay();
+			ReadMode();
+		}
+	}
+	
+}
