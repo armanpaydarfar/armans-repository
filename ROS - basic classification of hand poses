@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+
+##########################################
+##### WRITE YOUR CODE IN THIS FILE #######
+##########################################
+import rospy
+import numpy
+import time
+from sklearn.svm import SVC
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression
+from sklearn import preprocessing
+from hand_analysis.msg import *
+
+
+
+class GraspClustering(object):
+    def __init__(self):
+        
+        rospy.init_node('cluster_grasps',anonymous=True)        
+        
+        self.scaler = []
+        rospy.Subscriber('/grasp_info',GraspInfo,self.callback,queue_size = 100)
+        
+        self.pub = rospy.Publisher("/labeled_grasp_info",GraspInfo,queue_size=100)
+        time.sleep(1)
+        
+ 
+    def training(self):
+        
+        trainingfile = rospy.get_param('~train_filename')
+        dataArray = numpy.genfromtxt(fname=trainingfile, delimiter = ',', skip_header=1)
+        
+        
+        dataEMG = dataArray[:,1:9]
+        
+        dataGlove = dataArray[:,9:]
+        
+        catagory = dataArray[:,0]
+        
+
+        
+        self.characterizer = SVC(gamma='scale')
+        self.characterizer.fit(dataGlove,catagory)
+    
+
+        self.scaler = preprocessing.StandardScaler().fit(dataEMG)
+        dataEMG_pre = self.scaler.transform(dataEMG)        
+        self.charEMG = SVC(gamma = 'scale')
+        self.charEMG.fit(dataEMG_pre,catagory)
+        
+         
+        self.regData = LinearRegression().fit(dataEMG,dataGlove)
+
+       
+        self.dimRed = PCA(n_components = 2)
+        self.dimRed.fit(dataGlove)
+        #dataReduced = self.dimRed.transform(dataGlove)
+        
+       
+    def callback(self,msg):
+       
+        rate = rospy.Rate(500)
+        rate.sleep()
+        predictMessege = GraspInfo()
+        
+        if(msg.label == -1 and msg.glove!=() and msg.emg == ()):
+            
+            self.glovedata = numpy.array(msg.glove) 
+            
+            self.predicted = self.characterizer.predict(self.glovedata.reshape(-1,15))
+            
+            predictMessege.label = self.predicted
+            self.pub.publish(predictMessege)
+            
+        elif(msg.label == -1 and msg.emg!=() and msg.glove ==()):
+            
+
+            self.emgData = numpy.array(msg.emg)
+            
+            emg_scaled = self.scaler.transform(self.emgData.reshape(-1,8))
+                    
+            self.predicted = self.charEMG.predict(emg_scaled)
+            #print(self.charEMG.score(self.emgData.reshape(-1,8),self.predicted))
+            gloveDataPredicted = self.regData.predict(self.emgData.reshape(-1,8))
+            gloveDataPredicted = gloveDataPredicted.reshape(-1,15)
+           
+            predictMessege.label = self.predicted
+            
+            
+            predictMessege.glove =gloveDataPredicted[0]
+        
+            self.pub.publish(predictMessege)
+            
+        elif(msg.glove_low_dim !=[]):
+            
+            high_dim = self.dimRed.inverse_transform(msg.glove_low_dim)
+            predictMessege.glove = high_dim
+            self.pub.publish(predictMessege)
+         
+if __name__ == '__main__':
+    
+    
+    #numpy.set_printoptions(threshold = numpy.inf)
+
+    graspObject = GraspClustering()
+    graspObject.training()
+    
+    #time.sleep(1)
+    rospy.spin()
+
