@@ -1,0 +1,154 @@
+#!/usr/bin/env python
+import torch
+import torch.nn as nn
+import torch.nn.functional as Func
+from torch.utils.data.dataset import Dataset
+from torch.utils.data import DataLoader
+import numpy
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import rospy
+from robot_sim.srv import RobotAction
+from robot_sim.srv import RobotActionRequest
+from robot_sim.srv import RobotActionResponse
+
+        
+def acquire_data(datasize,sliceNum):
+    rospy.wait_for_service("real_robot")
+    real_robot = rospy.ServiceProxy('real_robot',RobotAction)
+    num_columns = 3
+    input_vector = numpy.zeros((datasize,num_columns))
+    datalog = []
+    for i in range(0, datasize):
+        if(i%sliceNum == 0):        
+            input_vector[i,:] = [-1+2*numpy.random.rand(1),-0.5+1*numpy.random.rand(1),-0.25+0.5*numpy.random.rand(1)]
+            state = real_robot(1,input_vector[i,:])
+        else:
+            input_vector[i,:] = input_vector[i-1,:]
+            state = real_robot(0,input_vector[i,:])
+            
+        datalog.append(state.robot_state)
+    return input_vector,datalog
+  
+class MyNeuralNet(nn.Module):
+    def __init__(self, input_dim):
+        super(MyNeuralNet, self).__init__()
+        self.input_layer = nn.Linear(input_dim, 30)
+        self.hidden_1 = nn.Linear(30, 30)
+        self.hidden_2 = nn.Linear(30, 30)
+        self.output_layer = nn.Linear(30,6)
+
+    def forward(self, x):
+        x = Func.relu(self.input_layer(x))
+        x = Func.relu(self.hidden_1(x))
+        x = Func.relu(self.hidden_2(x))
+        x = self.output_layer(x)
+        return x
+	
+    def predict(self, features):
+        self.eval()	
+        features = torch.from_numpy(features).float()
+        
+        return self.forward(features).detach().numpy()
+
+class MyDataset(Dataset):
+    def __init__(self, labels, features):
+        super(MyDataset, self).__init__()
+        self.labels = labels
+        self.features = features
+
+    def __len__(self):
+        return self.features.shape[0]
+
+    def __getitem__(self, i):		
+        feature = self.features[i]
+        label = self.labels[i]
+        return {'feature': feature, 'label': label}
+    
+class Trainer_class(object):
+    def __init__(self, network):	
+        self.network = network
+        self.learning_rate = .01        
+        self.StateMatrix = [-1.57, 0., 0., 0., 0., 0.]   
+        self.optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
+        #self.optimizer = torch.optim.Adam(self.network.parameters(), lr=self.learning_rate)
+        self.num_epochs = 150
+        self.batchsize = 100
+        self.shuffle = True
+        self.criteria = nn.MSELoss()
+       
+    def train(self, labels, features):
+        self.network.train()
+        dataset = MyDataset(labels, features)
+        loader = DataLoader(dataset, shuffle=self.shuffle, batch_size = self.batchsize)
+        for epoch in range(self.num_epochs):
+            self.train_epoch(loader)
+
+    def train_epoch(self, loader):
+        total_loss = 0.0
+        for i, data in enumerate(loader):
+            self.optimizer.zero_grad()
+            features = data['feature'].float()
+            labels = data['label'].float()
+            predictions = self.network(features)
+            loss = self.criteria(predictions, labels)
+            loss.backward()
+            total_loss += loss.item()
+            self.optimizer.step()
+        
+
+
+    def fake_robot_action(self,req):
+        if req.reset == True:
+            self.StateMatrix = [-1.57, 0., 0., 0., 0., 0.]
+            state =self.StateMatrix
+        else:
+            
+            feature = [self.StateMatrix[0],self.StateMatrix[1],self.StateMatrix[2],self.StateMatrix[3],self.StateMatrix[4],self.StateMatrix[5], req.action[0],req.action[1],req.action[2]]
+            feature = numpy.asarray(feature)            
+            state = self.network.predict(feature)
+            self.StateMatrix = state
+        
+        #print(self.StateMatrix)
+        return  RobotActionResponse(state)
+            
+    
+    def fake_robot_service(self):
+        rospy.init_node('fake_robot_service')
+        rospy.Service('fake_robot',RobotAction, self.fake_robot_action)
+    
+        print('ready to execute')
+        rospy.spin()
+    
+
+if __name__ == '__main__':
+    datasize = 100000
+    num_steps = 100
+    input_vector,datalog =acquire_data(datasize,num_steps)
+    totalData = numpy.zeros((datasize,9))
+    
+    for i in range(0,datasize):
+        totalData[i][0:6] = datalog[i][:]
+        totalData[i][6:9] = input_vector[i][:]
+    
+    network = MyNeuralNet(9)
+    trainer = Trainer_class(network)
+    features = []
+    x = numpy.zeros(9)
+    labels = []
+    for i in range(datasize-1):
+        for j in range(9):
+            x[j]= totalData[i,j]
+            
+      
+        features.append([x[0], x[1], x[2], x[3], x[4],x[5],x[6],x[7],x[8]])
+        labels.append(totalData[i+1,0:6]) 
+    
+    
+    features = numpy.asarray(features)
+    labels = numpy.asarray(labels)
+
+    network = trainer.train(labels, features)
+    trainer.fake_robot_service()
+    
+    
