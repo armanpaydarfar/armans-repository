@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+
+import numpy as np
+import rospy
+import random
+from robot_sim.srv import RobotAction
+from robot_sim.srv import RobotActionRequest
+from robot_sim.srv import RobotActionResponse
+from robot_sim.srv import RobotPolicy
+from robot_sim.srv import RobotPolicyRequest
+from robot_sim.srv import RobotPolicyResponse
+
+
+
+from collections import namedtuple
+
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torchvision.transforms as T
+
+
+
+class MyDNN(nn.Module):
+    def __init__(self, input_dim):
+        super(MyDNN, self).__init__()
+        self.input = nn.Linear(input_dim, 32)
+        self.hidden_1 = nn.Linear(32, 16)
+        self.output = nn.Linear(16,2)
+    def forward(self, x):
+        x = F.relu(self.input(x))
+        x = F.relu(self.hidden_1(x))
+        x = self.output(x)
+        return x.view(x.size(0), -1)
+
+    def predict(self, features):
+        self.eval() 
+        features = torch.from_numpy(features).float()
+        return self.forward(features)
+
+
+class Memory(object):
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.samples = []
+        self.trans = namedtuple('trans', ('state', 'action', 'reward', 'new_state'))
+
+    
+    def save(self, sample):
+        try:
+            state = torch.tensor(np.asarray(sample[3]))
+        except:
+            state = None
+        self.samples.append(self.trans(torch.tensor(np.asarray(sample[0])), torch.tensor(np.asarray([sample[1]])), torch.tensor(np.asarray([sample[2]]), dtype = torch.float), state ))
+        if len(self.samples) > self.capacity:
+            self.samples.pop(0)
+
+   
+    def sample(self,batch_size):
+        
+        return random.sample(self.samples, batch_size)
+
+def response( action, reset_flag):
+    if reset_flag == False:        
+    
+        req = RobotActionRequest()
+        req.action = action
+        state = robot_action(req).robot_state
+        done_flag = is_valid(state)
+        
+        if done_flag is False:
+            reward = 1
+        else:
+            reward = 0
+            state = None
+        return state, reward,done_flag        
+    else:
+        req = RobotActionRequest()
+        req.reset_robot = True
+        req.action = []
+        req.reset_pole_angle = (np.random.rand(1)*6 - 3) * np.pi/180
+        state = robot_action(req).robot_state
+        return state
+ 
+
+def is_valid(state):
+     if state[0] > 1.2 or state[0]<-1.2 or state[1] > 6*np.pi/180 or state[1]< -6*np.pi/180:
+         return True
+     else:
+         return False
+               
+def select_Action(episode,state):
+    epsilon_threshold = max((1-(float(episode)/total_episodes)), epsilon)        
+    if np.random.rand() > epsilon_threshold:
+        with torch.no_grad():
+            return policy_net.predict(np.array(state)).max(0)[1].view(1,1)               
+            
+    else:            
+        return torch.tensor([[random.randrange(2)]])
+            
+def optimize_model():        
+    if len(memory.samples) < batch_size:
+        return
+    transits = memory.sample(batch_size)        
+    batch = memory.trans(*zip(*transits))        
+    non_final_mask = torch.tensor(tuple(map(lambda i: i is not None, batch.new_state)), dtype = torch.uint8)        
+    state_batch = torch.cat(batch.state).view(-1, 4)        
+    action_batch = torch.cat(batch.action)
+    reward_batch = torch.cat(batch.reward)        
+    new_state_notDone = torch.cat([i for i in batch.new_state if i is not None]).view(-1, 4)
+    net_output = policy_net.predict(state_batch.numpy())
+    state_action_vals = net_output.gather(1, action_batch.unsqueeze(1))
+    newStateVals = torch.zeros(batch_size, dtype = torch.float)
+    newStateVals[non_final_mask] = target_net.predict(new_state_notDone.numpy()).max(1)[0].detach()
+    expected_Vals = newStateVals * GAMMA + reward_batch
+    loss = F.smooth_l1_loss(state_action_vals, expected_Vals.unsqueeze(1))
+    optimizer.zero_grad()
+    loss.backward()
+    for param in policy_net.parameters():
+        param.grad.data.clamp_(-1,1)
+    optimizer.step()
+
+
+def policy(request):
+    req = np.asarray(request.robot_state)
+    prediction = policy_net.predict(req)
+    max_index = np.argmax(prediction.data)
+    if max_index == 1:
+        action = [10]
+    else:
+        action = [-10]
+        
+    return RobotPolicyResponse(action)
+
+
+def cartpole_policy():
+    rospy.init_node('cartpole_policy')
+    
+    rospy.Service('cartpole_policy', RobotPolicy, policy)
+    print('ready to predict')
+    rospy.spin()
+
+    
+
+
+if __name__ == '__main__':
+    np.random.seed(69)
+    random.seed(69)
+    torch.manual_seed(69)
+    initial_state = np.zeros((4,1))
+    total_episodes = 680
+    steps = 200
+    robot_action = rospy.ServiceProxy('cartpole_robot', RobotAction)
+    robot_policy = rospy.ServiceProxy('cartpole_policy', RobotPolicy, persistent = True)
+    policy_net = MyDNN(4) 
+    target_net = MyDNN(4)
+    policy_net.load_state_dict(target_net.state_dict())
+ 
+    GAMMA = 0.99
+
+    epsilon = 0.1
+    target_update = 100
+    learning_rate = 0.005
+    memory = Memory(7500)
+    batch_size = 128
+    optimizer = torch.optim.Adagrad(policy_net.parameters(), lr = learning_rate)
+
+    for episode in range(total_episodes):
+            total_reward = 0
+            state = response(None,True)
+            for t in range(steps):
+                action = select_Action(episode,state)                
+                new_state, reward, done = response([-10 + (action*20)],False)                
+                total_reward = total_reward+reward              
+                memory.save([state, action, reward, new_state])
+                state = new_state               
+                optimize_model()
+                if done:
+                    break            
+            print("episode", episode, "reward", total_reward)
+            if episode % target_update == 0:
+                target_net.load_state_dict(policy_net.state_dict())
+
+         
+    cartpole_policy()
+    
