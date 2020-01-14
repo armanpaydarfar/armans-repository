@@ -1,0 +1,429 @@
+#include <xc.h>
+#include <pic.h>
+#pragma config  FOSC=HS, CP=OFF, DEBUG=OFF, BORV=20, BOREN=0, MCLRE=ON, PWRTE=ON, WDTE=OFF
+#pragma config  BORSEN=OFF, IESO=OFF, FCMEN=0
+#define PORTBIT(adr,bit)((unsigned)(&adr)*8+(bit))
+
+void InitPort(void);
+void InitAD(void);
+void InitPWM(void);
+void SetupDelay(void);
+int Mode(int mode);
+void ReadMode(void);
+int ReadOctal(void);
+void SwitchDelay(void);
+void Error(void);
+void LightDelay(void);
+
+static bit blackButton @ PORTBIT(PORTA,4);
+static bit EddySen @ PORTBIT(PORTC,3);
+static bit Encoder @ PORTBIT(PORTC,6);				//declare variables, data types, functions
+static bit OctalSwitch0 @ PORTBIT(PORTC,4);
+static bit OctalSwitch1 @ PORTBIT(PORTC,5);
+bit Brake @ PORTBIT(PORTC,1);
+bit Direction @ PORTBIT(PORTC,0);
+bit TRISC2bit @ PORTBIT(TRISC,2);
+
+int adval;
+int speed;
+int pwmVal;
+int sum = 0;
+int adcount = 0;
+int reference = 150;
+int Kp = 10;
+int Kd = 3;
+int Ki = 0;
+int error_n1 = 0;
+int totalerror = 0;
+int integral = 0;
+int Encoder_n1 = 0;
+unsigned long encoderCount = 0;
+
+
+//interrupt function for AD converter, 
+//calculates the average speed and updates after 64 counts. This is for the tachometer readings
+
+void interrupt isrAD(void)
+{
+	sum += ADRESH;
+	adcount++;
+	
+	if(adcount == 64)
+	{
+		speed = sum / 64;
+		adcount = 0;
+		sum = 0;
+	}
+		
+	ADIF = 0;
+	GO = 1;	
+}
+
+void main(void)
+{
+	InitAD();
+	InitPort();
+	
+	InitPWM();
+
+	while(2!=1)
+	{	
+		if(blackButton == 1)
+		{ 		
+			ReadMode();	
+		}
+	}
+}
+
+
+void InitPort(void)
+{
+	PORTA = 0B00000000;
+	PORTB = 0B00000000;
+	PORTC = 0B00000000;
+	
+	TRISA = 0B00111111;
+	TRISB = 0B00000000;
+	TRISC = 0B11111000;
+	
+	Direction = 1;
+}
+
+
+//initialize AD converter, start conversion
+
+void InitAD(void)
+{
+	//initialize ports and registers
+	ADCON0 = 0B10001101;
+	ADCON1 = 0B01011101;
+	//TRISA = 0B00111111;
+	//initialize ad , enable interrupt
+	ADIF = 0;
+	ADIE = 1;//enable the A/D converter interrupt
+	PEIE = 1;//enable all unmasked periopheral iterrupts
+	GIE = 1;//eneable all unmasked interrupts
+	SetupDelay();   
+	GO = 1;                                                        //
+}
+
+
+void SetupDelay(void)
+{
+	for (int temp=100; temp>0; temp--){}	                      //	
+}
+
+//initializes PWM with the corrrect values, rotates motor 4 times and then stops the motor. 
+//The eddy sensor is used to detect a rotation
+
+void InitPWM(void)
+{
+	
+	PR2 = 0B11111111;
+	CCPR1L = 0B00000000;
+	TRISC = 0B11111000;
+	T2CON = 0B00000100;
+	CCP1CON = 0B00001100;
+	
+	
+	CCPR1L = 0B10011011;
+	int count = 0;
+	while(count <= 3)
+	{
+		while(EddySen!=1){}	
+		count++;
+		while(EddySen!=0){}
+	}
+	
+	CCPR1L = 0B00000000;
+}
+
+
+
+
+//reads mode from octal switch, executes mode
+
+void ReadMode(void)
+{
+	while(2!=1)
+	{
+		while(blackButton == 1){} // Wait for release
+		SwitchDelay();
+		switch (ReadOctal())
+		{
+			case 0:
+			{
+		  		Mode(0);
+				continue;
+			}
+
+			case 1: Error();
+			case 2: 
+			{
+				Mode(3);
+				continue;
+			}
+			case 3: Error();
+		}
+		PORTB = 0B11110000;
+	}
+}
+
+
+void SwitchDelay(void)
+{
+	for(int i =0; i<100;i++){}
+}
+
+
+int ReadOctal(void)
+{
+	if(OctalSwitch1 == 1)//1x
+	{
+		if(OctalSwitch0 == 1)//11
+		{
+			return 3;
+		}
+		else                 //10
+		{
+			return 2;
+		}
+	}
+	
+	else//0x
+	{
+		if(OctalSwitch0 == 1)//01
+		{
+			return 1;
+		}
+		else                 //00
+		{
+			return 0;
+		}
+	}
+}
+
+//error function, does not return, must reset if the code gets here
+
+void Error(void)
+{
+	PORTB = 0B10101010;
+	while(2!=1) {}
+}
+
+
+// This function handles both mode 0 and mode 3. The 3 while loops are for the 3 stages of the trapazoidal velocity function. 
+//note that the modes are the same, but the method of control is different. 
+
+int Mode(int mode)
+{
+	Brake = 0;
+	int error;
+	unsigned long loopcount = 0;		//local variable declarations
+	unsigned long maxloop = 200;
+	
+	//phase-1
+	encoderCount = 0;
+	while(reference < 190)
+	{
+		error = reference - speed;	
+		PORTB = error;
+		
+		
+		if(loopcount > maxloop)
+		{
+			totalerror = totalerror + error;
+			loopcount = 0;
+		}
+		loopcount++;
+		
+		
+		
+		//mode 0
+		if(mode == 0)
+		{
+			pwmVal = Kp * error; 		//Proportional control equation
+		}
+		//mode 3
+		else if(mode == 3)
+		{
+				
+			if(totalerror>2000)
+			{
+				totalerror = 2000;
+			}
+			integral = totalerror / 10;
+			pwmVal = Kp * error + Kd * (error - error_n1) + integral;			//PID equation
+			error_n1 = error;
+		}
+		
+		if(pwmVal > 255)
+		{
+			pwmVal = 255;
+		}
+		else if(pwmVal < 0)
+		{
+			pwmVal = 0;
+		}
+		CCPR1L = pwmVal;
+		
+		int encoder = Encoder;
+		if(Encoder_n1 == 0 && encoder == 1)
+		{
+			
+			encoderCount++;
+		}
+		if(encoderCount > 100)
+		{
+			reference++;
+			encoderCount = 0;
+		}
+		Encoder_n1 = encoder;
+	}
+	
+	
+	//phase-2
+	encoderCount = 0;
+	while(encoderCount < 6000)
+	{
+		
+		error = reference - speed;
+		PORTB = error;
+		
+		if(loopcount > maxloop)
+		{
+			totalerror = totalerror + error;		//the total error for the integral control term is not updated every loop, but every 200 loops
+									//since taking the sum too often will quickly overwhelm the amount of data that can be stored in an "int". not doing this will result in the motor stuttering.
+									// This way, the code can work more reliably
+			loopcount = 0;
+		}
+		loopcount++;
+		
+		//mode 1
+		if(mode == 0)
+		{
+			pwmVal = Kp * error;
+		}
+		//mode 3
+		else if(mode == 3)
+		{
+
+			if(totalerror>20000)
+			{
+				totalerror = 20000;
+			}
+			integral = totalerror / 10;		
+			pwmVal = Kp * error + Kd * (error - error_n1) + integral;
+			error_n1 = error;	
+		}
+		if(pwmVal > 255)
+		{
+			pwmVal = 255;
+		}
+		else if(pwmVal < 0)
+		{
+			pwmVal = 0;
+		}
+		CCPR1L = pwmVal;
+		
+		int encoder = Encoder;
+		if(Encoder_n1 == 0 && encoder == 1)
+		{
+			
+			encoderCount++;
+		}
+		Encoder_n1 = encoder;
+	}
+	
+	
+	//phase-3
+	encoderCount = 0;
+	while(speed > 140)
+	{
+
+	
+		
+		error = reference - speed;
+		PORTB = error;
+		
+		if(loopcount > maxloop)
+		{
+			totalerror = totalerror + error;
+			loopcount = 0;
+		}
+		loopcount++;
+		
+		
+		//mode 1
+		if(mode == 0)
+		{
+			pwmVal = Kp * error;
+		}
+		//mode 3
+		else if(mode == 3)
+		{
+			if(totalerror>20000)
+			{
+				totalerror = 20000;
+			}
+			integral = totalerror / 10;
+			pwmVal = Kp * error + Kd * (error - error_n1) + integral;
+			error_n1 = error;	
+		}
+
+		if(pwmVal > 255)
+		{
+			pwmVal = 255;
+		}
+		else if(pwmVal < 0)
+		{
+			pwmVal = 0;
+		}
+		CCPR1L = pwmVal;
+			
+		int encoder = Encoder;
+		if(Encoder_n1 == 0 && encoder == 1)
+		{
+
+			encoderCount++;
+		}
+		if(encoderCount > 100)
+		{
+			reference--;
+			encoderCount = 0;
+		}
+		Encoder_n1 = encoder;
+	}
+	
+	//stop
+	CCPR1L = 0B00000000;
+	Brake = 1;
+	
+	sum = 0;
+	adcount = 0;
+	reference = 150;
+	error_n1 = 0;
+	totalerror = 0;
+	integral = 0;
+	Encoder_n1 = 0;
+	encoderCount = 0;
+	
+	
+	while(2 != 1)
+	{
+		PORTB = 0B11111111;
+		LightDelay();
+		PORTB = 0B00000000;		//blink lights to indicate that the code is complete, waits for the next button press
+		LightDelay();
+		if(blackButton == 1)
+			break;
+	}
+	
+	return 0;
+}
+
+
+void LightDelay(void)
+{
+	for (int light=10000; light>0; light--){}
+}
