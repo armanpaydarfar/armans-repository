@@ -1,0 +1,489 @@
+	#include <P16F747.INC>
+	__CONFIG _CONFIG1, _FOSC_HS & _CP_OFF & _DEBUG_OFF & _VBOR_2_0 & _BOREN_0 & _MCLR_ON & _PWRTE_ON & _WDT_OFF
+	__CONFIG _CONFIG2, _BORSEN_0 & _IESO_OFF & _FCMEN_OFF
+
+Octal 	 equ 	20h
+State    equ 	21h
+Mode     equ    22h
+Count    equ    23h
+Timer0   equ 	24h
+Temp     equ 	25h
+ADVAL    equ	26h
+CountT   equ	27h
+Timer1   equ    28h
+Timer2   equ    29h
+TimerAD0 equ 	30h
+TimerAD1 equ 	31h
+TimerAD2 equ	32h
+TempAD   equ    33h
+TEST     equ    34h
+Timer3   equ    35h
+Timer4	 equ	36h
+Timer5	 equ	37h
+Counter4 equ    38h
+	     org 	00h
+
+		goto initPort
+;-------------------------------------------------------------------------------------------------------
+;initialize 
+initPort
+		clrf   PORTB
+		clrf   PORTC
+		clrf   PORTD
+		clrf   PORTE              ; octal switch
+		clrf   Count              ; zero counter
+		clrf   ADVAL
+		bsf    STATUS,RP0	
+		movlw  B'00000000' 
+		movwf  TRISB
+ 	    movlw  B'00000011' 
+		movwf  TRISC 
+		movlw  B'00000001'        ; pin 1 is an input, pins 2-8 output. pin 2 solenoid output
+		movwf  TRISD
+
+		bcf    STATUS,RP0
+		call   initAD             ; call to initialize A/D
+		call   SetupDelay         ; delay for Tad (see data sheet) prior to A/D start
+
+		bsf    STATUS,RP0         ; select register bank 1
+		movlw  B'00000111'        ;moved it after adcon
+		movwf  TRISE
+		bcf    STATUS,RP0         ; select register bank 
+		goto   waitpress
+
+initAD
+		bsf    STATUS,RP0         ; select register bank 1
+		movlw  B'00001010'        ; RA0,RA1,RA3 analog inputs, all other digital
+		movwf  ADCON1             ; move to special function A/D register
+		bcf    STATUS,RP0         ; select register bank 0
+		movlw  B'01000101'        ; select 8 * oscillator, analog input 0, turn on
+		movwf  ADCON0             ; move to special function A/D register
+		return
+
+SetupDelay
+		movlw  03h
+		movwf  Temp
+
+delayAD
+		decfsz Temp,F
+		goto   delayAD
+	    return
+
+;-------------------------------------------------------------------------------------------------------
+;wait for button press, green or red
+
+waitpress
+		btfsc  PORTC,0
+		goto   GreenPress
+		goto   waitpress
+	
+GreenPress
+		clrf   PORTB
+		btfss  PORTC,0
+		goto   waitpress
+
+GreenRelease
+		clrf   Count
+		btfsc  PORTC,0
+		goto   GreenRelease
+		movf   PORTE,0
+		movwf  Count              ; update the mode
+		comf   Count,1
+		btfsc  Count,2
+		goto   is_1xx
+		goto   is_0xx
+
+is_1xx
+		btfsc  Count,1
+		goto   is_11x
+		goto   is_10x
+
+is_0xx
+		btfsc  Count,1
+		goto   is_01x
+		goto   is_00x
+
+is_11x
+		goto   errorfun
+
+is_10x
+		btfsc  Count,0
+		goto   errorfun
+		goto   button_press_4
+
+is_01x
+		btfsc  Count,0
+		goto   button_press_3
+		goto   button_press_2
+
+is_00x
+		btfsc  Count,0
+		goto   button_press_1
+		goto   errorfun
+
+
+	
+;-------------------------------------------------------------------------------------------------------
+;mode 1
+
+button_press_1
+		bsf    PORTB,0
+		btfsc  PORTC,0
+		goto   endFunc
+		btfsc  PORTC,1
+		goto   red_noise
+		goto   button_press_1
+
+red_noise
+		btfss  PORTC,1
+		goto   button_press_1
+		goto   red_release_1
+
+red_release_1
+		btfsc  PORTC,1
+		goto   red_release_1
+		goto   main_func1	
+
+main_func1
+
+		movlw  B'00010000'
+		xorwf  PORTD            ; switch output to high, so solenoid engages
+		goto   button_press_1
+
+endFunc
+		bcf    PORTD,4
+		goto   GreenPress
+
+;-------------------------------------------------------------------------------------------------------
+;mode 2
+
+button_press_2
+		bsf    PORTB,1
+		btfsc  PORTC,0
+		goto   GreenPress
+		btfsc  PORTC,1
+		goto   red_noise_2
+		goto   button_press_2
+
+
+red_noise_2
+		btfss  PORTC,1
+		goto   button_press_2
+		goto   red_release_2
+
+red_release_2
+		btfsc  PORTC,1
+		goto   red_release_2
+		clrf   ADRESH
+		bsf    ADCON0,GO          ; start A/D conversion
+		goto   main_func2
+
+main_func2
+		btfsc  ADCON0,GO          ; check if A/D is finished
+		goto   main_func2         ; loop right here until A/D finished
+		btfsc  ADCON0,GO          ; make sure A/D finished
+		goto   main_func2         ; A/D not finished, continue to wait
+		movf   ADRESH,W           ; get A/D value
+		movwf  ADVAL
+		rrf    ADVAL,1
+		rrf    ADVAL,1
+		bcf    ADVAL,7
+		bcf    ADVAL,6
+		incf   ADVAL
+		decfsz ADVAL
+		goto   TransistorStart_M2
+		goto   errorfun
+
+TransistorStart_M2
+		bsf    PORTD,4
+		goto   timeloop
+	
+TransistorStop_M2
+		bcf    PORTD,4
+		goto   button_press_2
+
+timeloop 
+		movlw  06h                ; get most significant hex value + 1
+		movwf  Timer2             ; store it in count register
+		movlw  16h                ; get next most significant hex value
+		movwf  Timer1             ; store it in count register
+		movlw  15h                ; get least significant hex value
+		movwf  Timer0             ; store it in count register
+
+delay
+		btfsc  PORTC,1
+		goto   red_noise_2
+		decfsz Timer0, F          ; Delay loop
+		goto   delay
+		decfsz Timer1, F          ; Delay loop
+		goto   delay
+		decfsz Timer2, F          ; Delay loop
+		goto   delay
+		decfsz ADVAL,1
+		goto   timeloop           ; time another second
+		goto   TransistorStop_M2
+;-------------------------------------------------------------------------------------------------------
+;mode 3
+
+button_press_3
+		bsf    PORTB,1
+		bsf    PORTB,0
+		btfsc  PORTC,0
+		goto   GreenPress
+		btfsc  PORTC,1
+		goto   red_noise_3
+		goto   button_press_3
+
+red_noise_3
+		btfss  PORTC,1
+		goto   button_press_3
+		goto   red_release_3
+
+red_release_3
+		bsf    PORTD,5
+		btfsc  PORTC,1
+		goto   red_release_3
+		goto   main_func3
+
+main_func3
+
+		bsf    PORTD,3
+		bsf    ADCON0,GO          ; start A/D conversion
+		goto   readAD
+
+WaitPress_M3
+		btfsc  PORTC,1
+		goto   RedPress3
+		bsf    ADCON0,GO          ; start A/D conversion
+		goto   readAD
+
+RedPress3
+		btfss  PORTC,1
+		goto   RedPress3
+			
+RedRelease_3_prime
+		btfsc  PORTC,1
+  		goto   RedRelease_3_prime
+		bcf    PORTD,4
+		bcf    PORTD,3
+		goto   button_press_3
+
+readAD
+		btfsc  ADCON0,GO          ; check if A/D is finished
+		goto   readAD             ; loop right here until A/D finished
+		btfsc  ADCON0,GO          ; make sure A/D finished
+		goto   readAD             ; A/D not finished, continue to wait
+		movf   ADRESH,W           ; get A/D value
+		movwf  ADVAL
+		CLRF   ADRESH
+		movlw  B'01110000'        ;01110000
+		movwf  TempAD
+		incf   ADVAL
+		decfsz ADVAL   
+		goto   comparefunc
+		goto   errorfun
+
+comparefunc
+		decf   TempAD
+		btfsc  STATUS,2
+		goto   TransistorStart_M3
+		decf   ADVAL
+		btfsc  STATUS,2
+		goto   TransistorStop_M3
+		goto   comparefunc
+
+TransistorStart_M3
+		bsf    PORTD,4
+		goto   WaitPress_M3
+
+TransistorStop_M3
+		bcf    PORTD,4
+		goto   WaitPress_M3
+
+;-------------------------------------------------------------------------------------------------------
+;mode 4
+
+
+button_press_4
+		bsf    PORTB,2
+		btfsc  PORTC,0
+		goto   GreenPress
+		btfsc  PORTC,1
+		goto   red_noise_4
+		goto   button_press_4
+
+red_noise_4
+		btfss  PORTC,1
+		goto   button_press_4
+		goto   red_release_4
+
+red_release_4
+		btfsc  PORTC,1
+		goto   red_release_4
+		clrf   ADRESH
+		bsf    ADCON0,GO          ; start A/D conversion
+		goto   main_func4
+
+
+main_func4
+		btfsc  ADCON0,GO          ; check if A/D is finished
+		goto   main_func4         ; loop right here until A/D finished
+		btfsc  ADCON0,GO          ; make sure A/D finished
+		goto   main_func4         ; A/D not finished, continue to wait
+		movf   ADRESH,W           ; get A/D value
+		movwf  ADVAL
+		rrf    ADVAL,1
+		rrf    ADVAL,1
+		bcf    ADVAL,7
+		bcf    ADVAL,6
+		incf   ADVAL
+		call   ResetCounter 
+		decfsz ADVAL       
+		goto   transistor_on
+		goto   errorfun
+transistor_on
+		bsf    PORTD,4
+		movlw  B'00001011'
+		movwf  Counter4
+		goto   timeloop_4
+
+SensorCheck
+		btfsc  PORTD,0
+		goto   continue4
+		return
+
+timeloop_4
+		movlw  06h                ; get most significant hex value + 1
+		movwf  Timer2             ; store it in count register
+		movlw  16h              ; get next most significant hex value
+		movwf  Timer1             ; store it in count register
+		movlw  15h              ; get least significant hex value
+		movwf  Timer0             ; store it in count register
+
+delay_4
+		call   SensorCheck
+		decfsz Timer0, F          ; Delay loop
+		goto   delay_4
+		decfsz Timer1, F          ; Delay loop
+		goto   delay_4
+		decfsz Timer2, F          ; Delay loop
+		goto   delay_4
+		decf   Counter4
+		btfss  STATUS,Z
+		goto   timeloop_4
+		goto   errorfun
+	
+	
+continue4
+                                  ;possible problem
+		bsf    PORTD,2
+		movlw  06h                ; get most significant hex value + 1
+		movwf  Timer5             ; store it in count register
+		movlw  16h                ; get next most significant hex value
+		movwf  Timer4             ; store it in count register
+		movlw  15h                ; get least significant hex value
+		movwf  Timer3             ; store it in count register
+
+wait_a_little
+		decfsz Timer3, F          ; Delay loop
+		goto   wait_a_little
+		decfsz Timer4, F          ; Delay loop
+		goto   wait_a_little
+		decfsz Timer5,F
+		goto   wait_a_little
+
+
+; wait a little (1 second)
+		bcf    PORTD,4
+		goto   timeloop_4cont
+
+timeloop_4cont
+		movlw  06h                ; get most significant hex value + 1
+		movwf  TimerAD2           ; store it in count register
+		movlw  16h                ; get next most significant hex value
+		movwf  TimerAD1           ; store it in count register
+		movlw  15h                ; get least significant hex value
+		movwf  TimerAD0           ; store it in count register
+
+delay_4cont
+		btfss  PORTD,0
+		goto   restartFunc
+		decf   Timer0
+		decfsz TimerAD0, F        ; Delay loop
+		goto   delay_4cont
+		decf   Timer1
+		decfsz TimerAD1, F        ; Delay loop
+		goto   delay_4cont
+		decf   Timer2
+		decfsz TimerAD2, F        ; Delay loop
+		goto   delay_4cont
+		decfsz ADVAL,1
+		goto   timeloop_4cont     ; time another second
+		goto   timedone
+
+timedone
+		bcf    PORTD,2
+		call   ResetCounter
+timeLoop_4.1
+
+		movlw  06h                ; get most significant hex value + 1
+		movwf  Timer2             ; store it in count register
+		movlw  16h              ; get next most significant hex value
+		movwf  Timer1             ; store it in count register
+		movlw  15h              ; get least significant hex value
+		movwf  Timer0             ; store it in count register
+
+delay_4.1
+		btfss  PORTD,0
+		goto   button_press_4
+		decfsz Timer0, F          ; Delay loop
+		goto   delay_4.1
+		decfsz Timer1, F          ; Delay loop
+		goto   delay_4.1
+		decfsz Timer2, F          ; Delay loop
+		goto   delay_4.1	
+		decfsz Counter4
+		goto   timeLoop_4.1
+		goto   errorfun
+
+restartFunc	
+		decfsz CountT
+		goto   tort
+		goto   errorfun
+
+ResetCounter
+		movlw  B'00000010'
+		movwf  CountT
+		return
+
+
+tort
+		bcf    PORTD,2
+		goto   transistor_on
+
+errorfun
+		bsf    PORTB,3
+		bcf    PORTD,4
+		bcf    PORTD,2
+
+
+timeLoop_error
+		movlw  06h                ; get most significant hex value + 1
+		movwf  Timer2             ; store it in count register
+		movlw  16h              ; get next most significant hex value
+		movwf  Timer1             ; store it in count register
+		movlw  15h              ; get least significant hex value
+		movwf  Timer0             ; store it in count register
+
+delay_error
+		decfsz Timer0, F          ; Delay loop
+		goto   delay_error
+		decfsz Timer1, F          ; Delay loop
+		goto   delay_error
+		decfsz Timer2, F          ; Delay loop
+		goto   delay_error
+		movlw  B'00001000'
+		xorwf  PORTB
+		goto   timeLoop_error
+
+		END
