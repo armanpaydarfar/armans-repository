@@ -1,0 +1,255 @@
+/*   -
+/*
+* Project: Pressure Matrix
+* File: PressObj.h
+* Description: This module creates a mXn pressure matrix  
+* Author: Antonio Prado
+* Date: March 26, 2018
+
+
+* To-Do:
+        -
+
+* History:
+Date              Who?              Why?
+*******************************************************************************
+March 26, 2018      APM           Created
+
+
+*/
+//include generic libraries
+#include "stdlib.h"
+#include "Particle.h"
+#include "math.h"
+#include <algorithm>
+#include <string>
+//Include needed project header files
+#include "PressObj.h"
+
+//includes multiplexer
+//#include "TCA9548A-RK.h"
+
+//defines bit operations for multiplexer sequence use
+
+
+#define bitRead(value, bit) (((value) >> (bit)) & 0x01)
+#define bitSet(value, bit) ((value) |= (1UL << (bit)))
+#define bitClear(value, bit) ((value) &= ~(1UL << (bit)))
+#define bitWrite(value, bit, bitvalue) (bitvalue ? bitSet(value, bit) : bitClear(value, bit))
+
+
+
+
+
+/*
+
+Function: PressMat::PressMat()
+
+Parameters: int* rowPins : Pointer to an array containing the pin values for the rows
+            int* colPins : Pointer to an array containing the pin values for the columns
+            int nCols : The length of the column pins array
+            int nRows : The length of the rows pins array
+            uint16_t *emptyPressMat : An empty array of shape (nRows, nCols)
+
+Returns: PressMat object
+
+Description: Sets the initial settings of a pressure mat object
+
+Notes: An initialization function, should only be called once
+
+*/
+PressMat::PressMat(int* rowPins, int* colPins, int nCols, int nRows, uint16_t *emptyPressMat){
+    pressVals = emptyPressMat; 
+    rowPinsAssigned = rowPins;
+    colPinsAssigned = colPins;
+    dataRead = false;
+    colSize = nCols;
+    rowSize = nRows;
+    resetPins();
+}
+
+PressMat::PressMat(){
+}
+
+
+// function to read values with multiplexer and shift counter functionality
+
+
+
+
+
+void PressMat::readValsMulti(){
+    int loc;
+    int bitStateCol;
+    int bitStateRow;
+    resetPins();
+    digitalWrite(D7,HIGH);
+    //digitalWrite(A2,HIGH);
+    delayMicroseconds(10);
+    for(int i=0; i<colSize; i++){
+        Serial.println("starting new column");
+       
+
+        digitalWrite(D0,HIGH);
+        delayMicroseconds(10);
+        digitalWrite(D0,LOW);            
+        delayMicroseconds(10);    
+            
+           
+        for(int j=0;j<rowSize;j++){
+
+            digitalWrite(D1,HIGH);
+            delayMicroseconds(10);
+            digitalWrite(D1,LOW);
+            delayMicroseconds(10);
+           
+            loc = i*rowSize+j;
+            
+            pressVals[loc] = analogRead(A0);
+           
+        }
+        //delay(500);
+        
+    }
+}
+
+
+
+/*
+
+Function: PressMat::readValues()
+
+Parameters: none
+
+Returns: none
+
+Description: Reads the analog read of each of the row*cols sensor areas. The values are save into the 
+pressVals array of the PressMat object
+
+Notes: To retrieve the values use PressMatObj.pressVals
+
+*/
+void PressMat::readValues(){
+
+    // make sure the pins are in the correct type
+    int loc;
+    resetPins();
+    for (int m=0; m < colSize; m++){
+        pinMode(colPinsAssigned[m], OUTPUT);
+        digitalWrite(colPinsAssigned[m], LOW);
+        for (int n=0; n < rowSize; n++){
+            loc = m*rowSize + n;
+            pressVals[loc] = (uint16_t)analogRead(rowPinsAssigned[n]);
+        }
+        pinMode(colPinsAssigned[m], INPUT);
+    }
+}
+/*
+
+Function: PressMat::readValues()
+
+Parameters: none
+
+Returns: none
+
+Description: Reads the analog read of each of the row*cols sensor areas. The values are save into the 
+pressVals array of the PressMat object
+
+Notes: To retrieve the values use PressMatObj.pressVals
+
+*/
+void PressMat::readValues(int con){
+
+    // make sure the pins are in the correct type
+    int loc;
+    resetPins();
+    for (int m=0; m < colSize; m++){
+        pinMode(colPinsAssigned[m], OUTPUT);
+        digitalWrite(colPinsAssigned[m], LOW);
+        for (int n=0; n < rowSize; n++){
+            if(n%2 == con)
+                continue;
+            loc = m*rowSize + n;
+            pressVals[loc] = (uint16_t)analogRead(rowPinsAssigned[n]);
+        }
+        pinMode(colPinsAssigned[m], INPUT);
+    }
+}
+/*
+
+Function: PressMat::resetPins()
+
+Parameters: none
+
+Returns: none
+
+Description: Set the stages of all the row and columns pins to high impedance
+
+Notes:
+
+*/
+void PressMat::resetPins(){
+        // set all the rows and cols as digital outputs (these will be selectors for the multiplexer)
+    for (int m=0; m < colSize; m++){
+        pinMode(colPinsAssigned[m], OUTPUT); 
+    }
+    for (int n=0; n < rowSize; n++){
+        pinMode(rowPinsAssigned[n], OUTPUT); 
+    }
+    
+}
+/*
+
+Function: PressMat::readValue()
+
+Parameters: int row : Row number
+            int col : Column number
+
+Returns: uint16_t of the read value
+
+Description: Returns the value of the sensor in [row, col]
+
+Notes:
+
+*/
+uint16_t PressMat::readValue(int row, int col){
+    // col are digital, row are Analog
+    pinMode(colPinsAssigned[col], OUTPUT);
+    digitalWrite(colPinsAssigned[col], LOW);
+    uint16_t val = (uint16_t)analogRead(rowPinsAssigned[row]);  // read the analogPin
+    pinMode(colPinsAssigned[col], INPUT);
+    return val;
+    
+}
+/*
+
+Function: PressMat::getColSize()
+
+Parameters: None
+
+Returns: int, column size
+
+Description: Return the column size of the array
+
+Notes:
+
+*/
+int PressMat::getColSize(){
+    return colSize;
+}
+/*
+
+Function: PressMat::getRowSize()
+
+Parameters: None
+
+Returns: int, row size
+
+Description: Return the row size of the array
+
+Notes:
+
+*/
+int PressMat::getRowSize(){
+    return rowSize;
+}
