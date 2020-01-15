@@ -1,0 +1,583 @@
+// This #include statement was automatically added by the Particle IDE.
+#include "PressObj.h"
+#include <vector>
+//#include "TCA9548A-RK.h"
+
+#define BOARD_LED_PIN TX
+
+#define UDP_Buffer_Size 1024 //the size of the UDP buffer, which buffers both incoming and
+                         //outgoing UDP data
+#define UDP_Tx_Size  1024 //the size of the UDP Tx array that we'll that we load with outgoing data,
+                        //enough to store two data points from gyro+accelero
+#define UDP_Rx_Size 1024 //the size of the receive (Rx) UDP array that we
+                           //use to store incoming data.
+#define UDP_PORT 12364   //The port on which to listen for incoming data
+                           
+#define NUMBER_COLUMNS 16
+#define NUMBER_ROWS 16
+#define PORT_SEND 12347 //The port to send data to, e.g. the port the PC is using to receive data
+
+
+
+#define FREQ 100
+
+
+
+
+#define BYTE_PACKET 523
+#define max_byte_size 255
+
+//timing
+static unsigned long startTime; //stores the start time of the program [ms]
+static unsigned long currentTime; //stores the current time of the program
+static unsigned long nextTime;
+static unsigned long cycletime;
+//Onboard LED
+static unsigned long lastLEDblinkTime;
+static bool LEDstate;
+static unsigned long lastDataRecordTime;
+
+//UDP vars
+static bool haveCheckedForUDPData; //a flag to ensure that we check for a waiting UDP data packet only once if
+static uint8_t PCipInt[] = {192, 168, 0, 255};//send to "slave" photon. { 192, 168, 1, 252}; antonio's PC IP address
+static IPAddress PCipObj(PCipInt);
+
+static uint8_t dataCommunicationPacket[BYTE_PACKET];
+
+static unsigned int localPort = UDP_PORT; // UDP Port used for two way communication
+static unsigned int masterUDPPort = 8888; // UDP port used on the master side
+static UDP Udp;  // An UDP instance to let us send and receive packets over UDP
+static uint8_t masterSideIPAsBytes[] = {192, 168, 0, 255}; //the IP address of the master-side microcontroller
+static IPAddress masterSideIPAddress(masterSideIPAsBytes); //the IP address of the master microcontroller
+static int masterPort = 8888; //the port we'll be sending the
+static IPAddress senderIPAddress; //the IP address of the sender, from the last received data packet
+static int senderPort; //the port of the sender, from the last received data packet
+static uint8_t UDP_buffer[UDP_Buffer_Size]; //the size of the UDP buffer
+static uint8_t UDP_Tx[UDP_Tx_Size]; //the UDP transmit array that we load with outgoing data
+static uint8_t UDP_Rx[UDP_Rx_Size]; //the UDP buffer for incoming data
+static uint8_t currentTxBufferSize;
+static uint16_t packetSize = BYTE_PACKET;
+static uint8_t maxByteSize = max_byte_size;
+
+
+uint16_t currentSensorData[NUMBER_ROWS*NUMBER_COLUMNS];
+int colPins[] = {D0, D1, D2, D3};
+int rowPins[] = {A1, A2, A3, A4};
+int *row = rowPins;
+int *col = colPins;
+uint16_t *mat = currentSensorData;
+PressMat theMat(row, 
+                col,
+                NUMBER_COLUMNS, NUMBER_ROWS,
+                mat);
+                
+bool gSync;
+bool waiting2record;
+bool change = false;
+unsigned long period = 1000.0 / (float)FREQ ;
+
+
+
+
+//TCA9548A mux(Wire, 0);
+
+
+//choose the Particle Photon's system mode. ******************************************************************
+//SYSTEM_MODE(MANUAL); //manual mode means the Photon does NOT automatically connect to the cloud, and we have to establish connnectivity and maintain it with calls to Particle.process(). We
+//don't need cloud connectivity at all though, so we'll avoid all of this.
+//******************************************************************************
+// WifiSetup
+void WifiSetup(/* arguments */) {
+       int lasDir;
+    lasDir = 111;
+    
+    IPAddress myAddress(192,168,0,lasDir);
+    IPAddress netmask(255,255,255,0);
+    IPAddress gateway(192,168,0,1);
+    IPAddress dns(192,168,0,1);
+    WiFi.setStaticIP(myAddress, netmask, gateway, dns);
+    
+    // now let's use the configured IP
+    WiFi.useStaticIP();
+    WiFi.connect(); //use stored credentials (loaded onto the Particle Photon) to try to connect to WiFi
+    while(!WiFi.ready()){;} //block until this Photon has been assigned an IP address. We may need to do this on a Local Area Network.
+
+}
+
+/*
+Function: initializeVariables()
+
+Parameters: none
+
+Returns: none
+
+Description: initialize variables to the values they should have at the start of the program
+
+Notes: An initialization function, should only be called once
+
+*/
+void initializeVariables(){
+    gSync = false;
+    lastLEDblinkTime = 0;
+    LEDstate = false;
+    lastDataRecordTime = 0;
+    waiting2record = false; //should be false here!
+
+    //timekeeping
+    startTime = millis(); //mark the start of the program so that we can keep track of the time
+}
+void setup() {
+    Serial.begin(9600);
+    
+    Serial.println("serial works");
+
+    WifiSetup();
+    initializeVariables();
+    
+    //begin multiplexer
+	//mux.begin();
+	//mux.setChannel(0);
+    
+    
+    
+    //UDP
+    Udp.begin(UDP_PORT);
+    pinMode(BOARD_LED_PIN, OUTPUT);
+    pinMode(A0,INPUT);
+    pinMode(A1,OUTPUT);
+    pinMode(A2,OUTPUT);
+    pinMode(A3,OUTPUT);
+    pinMode(A4,OUTPUT);
+    pinMode(D0,OUTPUT);
+    pinMode(D1,OUTPUT);
+    pinMode(D2,OUTPUT);
+    pinMode(D3,OUTPUT);
+    pinMode(D4,OUTPUT);
+    pinMode(D5,OUTPUT);
+    //pinMode(BOARD_LED_PIN, INPUT);
+    pinMode(D7, OUTPUT);
+    digitalWrite(D7, HIGH);
+    //digitalWrite(D0, HIGH);
+    //delay(100000);
+    // This is for the sync signal out
+    Serial.println("waiting 5 seconds");
+    delay(5000);
+    digitalWrite(BOARD_LED_PIN, true);
+    gSync = 1;
+    Serial.println("initialization complete");
+}
+
+void loop() {
+    //
+    
+    currentTime = millis(); //get a timestamp for the start of this loop
+    //controlLED(1000, currentTime); //While the flag indicating that we should collect sensor data is set, ensure the LED blinks at 0.5Hz, 50% on-time
+    
+    //Check period has passed
+    if (currentTime - lastDataRecordTime >= period){
+        change = !change;
+        lastDataRecordTime = currentTime; //update the last time of data collection with the current time
+        //theMat.readValues((int)change); // collect new sensor data, if enough time has elapsed since the last time we collected data
+        theMat.readValsMulti(); // collect new sensor data, if enough time has elapsed since the last time we collected data
+        
+        //gSync = digitalRead(BOARD_LED_PIN);
+        createDataPacket(dataCommunicationPacket,  (uint32_t)(currentTime - startTime)); // create a data packet
+        
+        //logDataLocallyToMicroSD(); //log the data locally on a microSD card
+        write_udp(dataCommunicationPacket,  BYTE_PACKET,  max_byte_size); // send data to data logging device over UDP
+        //Serial.println("Data Recorded");
+    } else {
+        checkForReceivedUDPData();
+    }
+    nextTime = millis();
+    
+    cycletime = nextTime-currentTime;
+    //Serial.print(cycletime);
+    //Serial.print("    ");
+    
+}
+/*
+
+Function: checkForReceivedUDPData()
+
+Parameters: none
+
+Returns: none
+
+Description: Checks to see if the UDP hardware has received any UDP data that needs to be processed. If there is data to be processed,
+reads and responds to the data
+
+Notes:
+
+*/
+void checkForReceivedUDPData() {
+
+  haveCheckedForUDPData = true; //note that we have checked for UDP data while we're waiting for new IMU data to be ready
+
+  // Check if UDP data has been received
+  uint16_t receivedPacketSize = Udp.parsePacket(); // prepares the packet to be read, and returns the size of the packet
+
+  if (receivedPacketSize > 0) { //if we do have UDP data waiting to be read
+    Serial.println("received a UDP packet");
+    //respond to received UDP data
+    readIncomingUDPData(receivedPacketSize); //read incoming UDP data from buffer
+    interpretReceivedUDPData(receivedPacketSize); //take any necessary action from incoming UDP data
+  }
+}
+
+/*
+
+Function: readIncomingUDPData()
+
+Parameters: none
+
+Returns: none
+
+Description: Reads UDP data sent from the master shoe Photon. Stores the data in
+the UDP_Rx buffer.
+
+Notes:
+
+*/
+void readIncomingUDPData(uint16_t receivedPacketSize){
+
+  // Store sender ip and port
+  senderIPAddress = Udp.remoteIP();
+  senderPort = Udp.remotePort();
+
+  // Read in all waiting data from the UDP buffer
+  while(Udp.available()) { //if there is still data in the Rx UDP buffer
+    Udp.read(UDP_Rx, receivedPacketSize); //read a character into the Rx buffer
+  }
+
+} //end readIncomingUDPData()
+
+/*
+
+Function: interpretReceivedUDPData()
+
+Parameters: none
+
+Returns: none
+
+Description: Responds to incoming UDP data
+
+Notes:
+
+*/
+void interpretReceivedUDPData(uint16_t receivedPacketSize){
+
+  if((UDP_Rx[0]==0xA) & (UDP_Rx[1]==0xD) & (UDP_Rx[2]==0xA)){ //if this UDP data packet is from the "master" microcontroller or PC
+  respondToMasterUDPCommand(receivedPacketSize);
+} else { //if this UDP data packet is from the other shoe (we should explicitly do a check to ensure it's the other shoe)
+//dataCommunicationPacket2 = buf;
+//memcpy(dataCommunicationPacket2,buf,BYTE_PACKET);
+}
+
+}
+/*
+
+Function: respondToMasterUDPCommand()
+
+Parameters: int lengthOfIncomingCommandPacket - the number of bytes that the incoming UDP packet
+sent by the master contains
+
+Returns: int - indicates success or failure?
+
+Description: Responds to UDP commands sent by the master device, which control settings in this program
+
+Notes:
+
+*/
+int respondToMasterUDPCommand(int lengthOfIncomingCommandPacket){
+
+  uint8_t receivedCommand = UDP_Rx[3]; //the command received from the "master" microcontroller/PC. 3 is the position in the incoming UDP packet that specifies the type of command
+  char charArrayToSendViaUDP[100]; //a String to send back to the "master" over UDP
+  Serial.print("responding to command ");
+  Serial.println(UDP_Rx[3]);
+  //sprintf(charArrayToSendViaUDP,"Hello world!!");
+
+  switch(receivedCommand){ //switch depending on the received command
+    case 1://ping
+    sprintf(charArrayToSendViaUDP,"Hello from Mat");
+    write_udp(charArrayToSendViaUDP);
+    break;
+    case 2://start recording
+    sprintf(charArrayToSendViaUDP,"Recording Started");
+    write_udp(charArrayToSendViaUDP);
+    //startRecording();
+    break;
+    case 3://stop recording
+    //stopRecording();
+    sprintf(charArrayToSendViaUDP,"Recording Stopped");
+    write_udp(charArrayToSendViaUDP);
+    break;
+    case 4://Change log name??
+    //changeLogName(dataPacket);
+    break;
+    case 5://send time
+    sprintf(charArrayToSendViaUDP,"Hello from %s, time is %u","Mat",millis());
+    write_udp(charArrayToSendViaUDP);
+    break;
+    case 6://start streaming data
+    //startRecording();
+    break;
+    case 7://stop streaming data
+    //stopRecording();
+    break;
+    case 8://changeVibrator
+    //changeVibratorCMD();
+    break;
+    case 9://stop program
+    //sendPressValues(&PCipObj);
+    break;
+    case 10://stop program
+      sprintf(charArrayToSendViaUDP,"Mat entering Safe mode for Flashing");
+      write_udp(charArrayToSendViaUDP);
+      System.enterSafeMode();
+      break;
+    case 11://stop program
+      sprintf(charArrayToSendViaUDP,"Mat is resetting");
+      write_udp(charArrayToSendViaUDP);
+      System.reset();
+      break;
+    case 12://stop program
+    gSync = (int16_t)UDP_Rx[4];
+    break;
+    default: //the default case, if the command value did not match any known command
+    sprintf(charArrayToSendViaUDP,"Hello from %s, wrong instruction","Mat");
+    write_udp(charArrayToSendViaUDP);
+    return 0;
+  }
+
+}
+
+/*
+
+Function: controlLED()
+
+Parameters: unsigned long pulseTime - how long the LED should stay on or off for [ms]
+
+unsigned long currentTime - roughly, the current time of the program, measured since the start of the program [ms]
+
+Returns: none
+
+Description: If the LED has not changed states for more than pulseTime, measured in ms, then change its state.
+
+Notes:
+
+*/
+void controlLED(unsigned long pulseTime, unsigned long currentTime){
+  if (currentTime - lastLEDblinkTime > pulseTime){
+    LEDstate = !LEDstate;
+    lastLEDblinkTime = currentTime;
+    digitalWrite(BOARD_LED_PIN, LEDstate);
+  }
+
+}
+
+/*
+
+Function: createDataPacket()
+
+Parameters: none
+
+Returns: none
+
+Description: Creates a data packet from the current sensor that can be sent over UDP.
+
+Notes:
+
+*/
+void createDataPacket(uint8_t *dataPacket, uint32_t timestamp)
+{
+    // START
+    //why this padding? We could just use a single-byte start delimiter and a checksum (if we wanted error checking)
+    dataPacket[0]=0x01;
+    dataPacket[1]=0x02;
+    dataPacket[2]=0x03;
+    dataPacket[3]=(char)gSync;
+    uint8_t* pData = (uint8_t*)&timestamp;
+    memcpy(&dataPacket[4],&pData[0],sizeof(timestamp));
+    
+    pData = (uint8_t*)&currentSensorData;
+    memcpy(&dataPacket[8],&pData[0],sizeof(currentSensorData));
+    
+    // STOP
+    //why this padding? We could just use a single-byte start delimiter and a checksum (if we wanted error checking)
+    dataPacket[8 + sizeof(currentSensorData)]=0xA;
+    dataPacket[9 + sizeof(currentSensorData)]=0xB;
+    dataPacket[10 + sizeof(currentSensorData)]=0xC;
+}
+
+
+
+/*
+
+Function: write_udp()
+
+Parameters: char *bufferToSend - a pointer to the first element of the buffer (char array) we want to send over UDP
+
+int targetDevice - a specifier for the target device (e.g., data logger, master PC, or other)
+
+Returns: none
+
+Description: Sends via UDP a single byte pointed to by *bufferToSend, to the target device specified by targetDevice.
+Target device is used to choose the target's IP address and port.
+
+Notes:       This function is overloaded
+
+*/
+void write_udp(char *bufferToSend){
+  //determine target and address the packet accordingly
+Udp.beginPacket(PCipObj, PORT_SEND);
+//write the UDP packet out
+Udp.write(bufferToSend);
+//end this UDP transmission
+Udp.endPacket();
+
+}
+
+
+/*
+
+Function: write_udp()
+
+Parameters: char *bufferToSend - a pointer to the first element of the buffer (char array) we want to send over UDP
+
+int targetDevice - a specifier for the target device (e.g., data logger, master PC, or other)
+
+uint8_t numBytesToSend - the number of bytes to send, starting with the one pointed to by *bufferToSend
+
+Returns: none
+
+Description: Sends via UDP the number of bytes specified by numBytesToSend that are stored consecutively in a char array pointed to by *bufferToSend, to
+the target device specified by targetDevice. Target device is used to choose the target's IP address and port.
+
+Notes:       This function is overloaded
+
+*/
+void write_udp(uint8_t *bufferToSend, uint8_t numBytesToSend){
+  Udp.beginPacket(PCipObj, PORT_SEND);
+
+  //test code
+  /*Serial.print("data packet is: ");
+  for(int i = 0; i < (sizeof(currentSensorData) + 6); i = i + 1){
+  Serial.print(dataCommunicationPacket[i]);
+  }
+  Serial.println();*/
+  //end test code
+
+  //write the UDP packet out
+  Udp.write(bufferToSend, 523);
+  //end this UDP transmission
+  Udp.endPacket();
+
+}
+
+
+
+/*
+
+The below function will operate as follows:
+
+1. will input the pointer to the "datacommunicationspacket" array, packet size, and maximum appending size, which is a limitation of the write_udp built in function and is equal to 255 (max value of a uint8)
+2. it will incrementally add to the packet based on how many times the append size (255) goes into the packet size, and update the pointer so that it now points inside the uncopied "list" in system memory
+
+*/
+void write_udp(uint8_t *bufferToSend, uint16_t numBytesToSend, uint8_t maxAppendSize ){
+    
+    int First_quotient = (int) numBytesToSend/maxAppendSize;
+    int remain = numBytesToSend % maxAppendSize;
+    
+    Udp.setBuffer(523);
+
+    Udp.beginPacket(PCipObj,PORT_SEND);
+    
+    int quotient = First_quotient;
+    int counter = quotient;
+    
+    
+    
+    if(remain != 0){
+        counter = quotient+1;
+    }
+    
+    
+    
+    for(int k=0;k < counter; k++){
+        
+        if(k < counter - 1){
+
+            Udp.write(bufferToSend,maxAppendSize);
+            //Serial.println("first loop");
+                
+        }
+        else{
+            
+            Udp.write(bufferToSend,remain);
+            //Serial.println("second loop");
+        }
+        
+        bufferToSend = bufferToSend+maxAppendSize;
+        //char hello[50];
+        //Serial.println("   ");
+        //Serial.println(sprintf(hello,"%p",(void *)bufferToSend));
+        //Serial.println("   ");
+        //delay(200);
+        //numBytesToSend = numBytesToSend - maxAppendSize;
+        
+    
+                
+    }
+    Udp.endPacket();
+    
+    
+    
+}
+
+//   if (numBytesToSend % j != 0){
+//        Udp.write(trunVector,numBytesToSend)
+  //  }
+//        else{
+  //      Udp.write(bufferToSend);
+//    }
+
+
+
+
+
+
+
+//
+
+/*
+
+Function: write_udp()
+
+Parameters: char *bufferToSend - a pointer to the first element of the buffer (char array) we want to send over UDP
+
+int targetDevice - a specifier for the target device (e.g., data logger, master PC, or other)
+
+uint8_t numBytesToSend - the number of bytes to send, starting with the one pointed to by *bufferToSend
+
+Returns: none
+
+Description: Sends via UDP the number of bytes specified by numBytesToSend that are stored consecutively in a char array pointed to by *bufferToSend, to
+the target device specified by targetDevice. Target device is used to choose the target's IP address and port.
+
+Notes:       This function is overloaded
+
+
+void write_udp(char *bufferToSend, PacketSize){
+    //determine target and address the packet accordingly
+    Udp.beginPacket(PCipObj, PORT_SEND);
+    //write the UDP packet out
+    Udp.write((uint8_t*)dataCommunicationPacket, numBytesToSend);
+    //end this UDP transmission
+    Udp.endPacket();
+
+}
+*/
+
+
