@@ -1,0 +1,643 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
+import matplotlib
+
+import numpy as np
+import os
+import operator as op
+import tensorflow as tf
+import pickle
+import seaborn as sns
+import scipy
+from scipy import stats
+import random
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, Conv1D, GRU, GRUCell, Input, Dropout, RNN,MaxPool1D
+from tensorflow.keras import Model
+from tensorflow.keras import backend as K
+import matplotlib.pyplot as plt
+#from sklearn.model_selection import LeaveOneOut
+import pandas
+from tensorflow.keras.models import load_model
+
+class NN:
+    def __init__(self,learning_rate,num_gru_cells,BATCH_SIZE,num_epochs):
+        self.learning_rate = learning_rate
+        self.num_gru_cells = (num_gru_cells,)
+        self.batch_size = BATCH_SIZE
+        self.num_epochs = num_epochs
+        self.num_activities = 0
+
+
+    def NN_create(self):
+
+        I = Input(shape=(50,6))
+        x = Conv1D(filters = 50, kernel_size = (20), activation='relu',padding='same')(I)
+        x = Conv1D(filters = 50, kernel_size = (10), activation='relu',padding='same')(x)
+        #x = MaxPool1D(pool_size = 2,padding = 'same')(x)
+        x = Dense(12, activation = 'relu')(x)
+        #add dense layers
+        x = RNN([GRUCell(n,recurrent_dropout = 0.2) for n in self.num_gru_cells], return_sequences = True, time_major = False)(x)
+        #x = Dense(32, activation='relu')(x)
+        x = Dense(32, activation='relu',kernel_regularizer = 'l1')(x)
+        #,kernel_regularizer = 'l1'
+        x = Dropout(0.3)(x)
+        x = Dense(32, activation='relu',kernel_regularizer = 'l1')(x)
+        x = Dropout(0.3)(x)
+        x = Dense(32,activation = 'relu',kernel_regularizer = 'l1')(x)
+        x = Dropout(0.3)(x)
+        x = Dense(32,activation = 'relu',kernel_regularizer = 'l1')(x)
+        #x = Dropout(0.5)(x)
+        #x = Dense(64,activation = 'relu')(x)
+        x = Conv1D(filters = 50, kernel_size = (20), activation='relu',padding='same')(x)
+        x = Conv1D(filters = 50, kernel_size = (10), activation='relu',padding='same')(x)
+        x = Flatten()(x)
+        x = Dense(self.num_activities,activation = 'softmax')(x)
+        shoe = Model(inputs=I, outputs=x)
+        shoe.summary()
+        optim = tf.keras.optimizers.Nadam(learning_rate=self.learning_rate)
+        shoe.compile(optim, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+
+        return shoe
+
+    def clean_data(self, data, label,ind,j):
+        num_object = data.shape[0]
+        num_sample = data.shape[2]
+        num_activities = data.shape[1]
+        self.num_activities = num_activities
+
+
+        data_train = data[ind]
+        label_train = label[ind]
+
+        data_test = data[j]
+        label_test = label[j]
+
+
+        data_train = np.reshape(data_train, ((num_object-1) * num_activities * num_sample, 50, 6))
+        label_train = np.reshape(label_train, ((num_object-1) * num_activities * num_sample))
+
+        data_test = np.reshape(data_test,(1*num_activities*num_sample,50,6))
+        label_test = np.reshape(label_test, (1*num_activities*num_sample))
+
+
+        x_test = []
+        y_test = []
+
+        x_ = []
+        y_ = []
+
+        for i in range(len(label_train)):
+            if np.isnan(label_train[i]):
+                continue
+            else:
+                x_.append(data_train[i])
+                y_.append(label_train[i])
+
+
+
+
+        for i in range(len(label_test)):
+            if np.isnan(label_test[i]):
+                continue
+            else:
+                y_test.append(label_test[i])
+                x_test.append(data_test[i])
+
+        data_test = np.asarray(x_test)
+        label_test = np.asarray(y_test)
+
+        data_train = np.asarray(x_)
+        label_train = np.asarray(y_)
+
+        return data_train,label_train,data_test,label_test
+
+
+    def train_NN(self,model,x_train,y_train,j):
+
+        history = model.fit(x_train, y_train, batch_size = self.batch_size, epochs = self.num_epochs, validation_split = 0.4, shuffle = True)
+        with open('loo_history_seed66_6ACT_20EPOCH_'+str(j), 'wb') as file_pi:
+            pickle.dump(history.history, file_pi)
+
+        model.save('loo_shoe__seed66_6ACT_20EPOCH_'+str(j)+'.h5')
+        return model,history.history
+
+    def test_activities(self,model,x,y):
+        y_prediction = np.zeros((self.batch_size))
+        y_=[]
+        y_accuracy = np.zeros(self.num_activities)
+        confusion_matrix = np.zeros((self.num_activities,self.num_activities))
+        for i in range(self.batch_size):
+            index = np.random.randint(0, len(y))
+            x_ = x[index]
+            y_.append(y[index])
+            y_vals = model.predict([[x_]])
+            y_prediction[i] = np.argmax(y_vals)
+            #print(y_prediction[i])
+            #print(y_[-1])
+            #print(confusion_matrix[int(y_[-1])][int(y_prediction[i])])
+            confusion_matrix[int(y_[-1])][int(y_prediction[i])] = np.add(confusion_matrix[int(y_[-1])][int(y_prediction[i])], 1)
+        for j in range(self.num_activities):
+            success = 0
+            failure = 0
+            for i in range(self.batch_size):
+                if j != y_[i]:
+                    continue
+                else:
+                    if y_[i] == y_prediction[i]:
+                        success = success+1
+                    else:
+                        failure = failure+1
+            try:
+                y_accuracy[j] =success/(success+failure)
+            except:
+
+                y_accuracy[j] = np.nan
+
+        for i in range(self.num_activities):
+            ColSum= sum(confusion_matrix[i][:])
+            for j in range(self.num_activities):
+                confusion_matrix[j][i] = confusion_matrix[j][i]/ColSum
+
+        return y_accuracy,confusion_matrix
+
+    def loo_matrix(self,label,j):
+        ind = []
+        for i in range(np.shape(label)[0]):
+            if i == j:
+                continue
+            else:
+                ind.append(i)
+        return ind
+
+
+
+    def loader(self,modelnamelist,historylist):
+        model_list = []
+        perf_list = []
+        for name in modelnamelist:
+            model = load_model(name)
+            model_list.append(model)
+        for history in historylist:
+            with open(history, 'rb') as pickle_file:
+                perf = pickle.load(pickle_file)
+            perf_list.append(perf)
+        return model_list,perf_list
+
+    def plot_performance_all(self,modelList,historyList,label,data,indlist,loo_list):
+
+
+        val_acc = np.zeros((len(historyList),len(historyList[0]['acc'])))
+        train_acc = np.zeros((len(historyList), len(historyList[0]['acc'])))
+        val_loss = np.zeros((len(historyList), len(historyList[0]['acc'])))
+        train_loss = np.zeros((len(historyList), len(historyList[0]['acc'])))
+
+        mean_val_acc = np.zeros(len(historyList[0]['acc']))
+        std_val_acc = np.zeros(len(historyList[0]['acc']))
+        mean_train_acc = np.zeros(len(historyList[0]['acc']))
+        std_train_acc = np.zeros(len(historyList[0]['acc']))
+
+        mean_val_loss = np.zeros(len(historyList[0]['acc']))
+        std_val_loss = np.zeros(len(historyList[0]['acc']))
+
+        mean_train_loss = np.zeros(len(historyList[0]['acc']))
+        std_train_loss = np.zeros(len(historyList[0]['acc']))
+
+        x = []
+        for i in range(len(historyList[0]['acc'])):
+            x.append(i)
+
+        for i in range(len(historyList)):
+            for j in range(len(historyList[0]['acc'])):
+                val_acc[i,j] = historyList[i]['val_acc'][j]
+                train_acc[i, j] = historyList[i]['acc'][j]
+                val_loss[i,j] = historyList[i]['val_loss'][j]
+                train_loss[i,j] = historyList[i]['loss'][j]
+
+        for i in range(len(historyList[0]['acc'])):
+            mean_val_acc[i] = np.mean(val_acc[:,i])
+            std_val_acc[i] = np.std(val_acc[:,i])
+
+            mean_train_acc[i] = np.mean(train_acc[:,i])
+            std_train_acc[i] = np.std(train_acc[:,i])
+
+            mean_val_loss[i] = np.mean(val_loss[:,i])
+            std_val_loss[i] = np.std(val_loss[:,i])
+
+            mean_train_loss[i] = np.mean(train_loss[:,i])
+            std_train_loss[i] = np.std(train_loss[:,i])
+
+        loo_acc = []
+        act_acc =[]
+
+        mean_act_acc = []
+        std_act_acc = []
+        confusion_mat = []
+
+        for i in range(len(modelList)):
+            loo_index = loo_list[i]
+            inds = indlist[i]
+            _,_,x_test,y_test = NN.clean_data(data,label,inds,loo_index)
+            evaluate = modelList[i].evaluate(x_test,y_test)
+
+            loo_accuracy = evaluate[-1]
+            loo_acc.append(loo_accuracy)
+
+        stats_activity_list = []
+        stats_model_list = []
+        for i in range(4,len(modelList)):
+            loo_index = loo_list[i]
+            inds = indlist[i]
+            _, _, x_test, y_test = NN.clean_data(data, label, inds, loo_index)
+            accuracy,confusion_matrix = NN.test_activities(modelList[i], x_test, y_test)
+            stats_model_list.append(np.mean(accuracy))
+            activity_accuracies = []
+
+            for j in range(self.num_activities):
+                activity_accuracies.append(confusion_matrix[j][j])
+            stats_activity_list.append(activity_accuracies)
+            confusion_mat.append(confusion_matrix)
+            act_acc.append(accuracy)
+
+
+
+
+
+        act_acc = np.asarray(act_acc)
+        confusion_mat = np.asarray(confusion_mat)
+        final_confusion = np.zeros((self.num_activities,self.num_activities))
+
+
+
+
+        for i in range(self.num_activities):
+            for j in range(self.num_activities):
+                num = 0
+                counter = 0
+                for k in range(np.shape(confusion_mat)[0]):
+                    num += confusion_mat[k][i][j]
+                    counter += 1
+
+                final_confusion[i][j] = num/counter
+
+        for i in range(self.num_activities):
+            ColSum= sum(final_confusion[i][:])
+            for j in range(self.num_activities):
+                final_confusion[j][i] = final_confusion[j][i]/ColSum
+
+        #print(final_confusion)
+        median_act_acc = []
+        iqr_act_acc = []
+        for i in range(self.num_activities):
+            mean_act_acc.append(np.mean(act_acc[:,i]))
+            median_act_acc.append(np.median(act_acc[:,i]))
+            iqr_act_acc.appen(scipy.stats.iqr(act_acc[:,i]))
+            std_act_acc.append(np.std(act_acc[:,i]))
+        k = []
+        for i in range(self.num_activities):
+            k.append(i)
+
+
+        final_confusion = np.transpose(final_confusion)
+
+        if self.num_activities == 5:
+            plot_data = {'balance, left':act_acc[:,0], 'balance, right':act_acc[:,1], 'standing':act_acc[:,2], 'toe-ups':act_acc[:,3], 'walking':act_acc[:,4]}
+            plot_data2 = {'balance, left': final_confusion[:, 0], 'balance, right': final_confusion[:, 1], 'standing': final_confusion[:, 2],'toe-ups': final_confusion[:, 3], 'walking': final_confusion[:, 4]}
+            plot_data2 = pandas.DataFrame(plot_data2,columns=['balance, left', 'balance, right', 'standing', 'toe-ups', 'walking'], index =['balance, left', 'balance, right', 'standing', 'toe-ups', 'walking'] )
+        if self.num_activities == 6:
+            plot_data = {'ascending stairs':act_acc[:,0],'balance, left':act_acc[:,1], 'balance, right':act_acc[:,2], 'standing':act_acc[:,3], 'toe-ups':act_acc[:,4], 'walking':act_acc[:,5]}
+            plot_data2 = {'ascending stairs': final_confusion[:,0],'balance, left': final_confusion[:, 1], 'balance, right': final_confusion[:, 2], 'standing': final_confusion[:, 3],'toe-ups': final_confusion[:, 4], 'walking': final_confusion[:, 5]}
+            plot_data2 = pandas.DataFrame(plot_data2, columns=['ascending stairs','balance, left', 'balance, right', 'standing', 'toe-ups', 'walking'], index = ['ascending stairs','balance, left', 'balance, right', 'standing', 'toe-ups', 'walking'])
+        if self.num_activities == 7:
+            plot_data = {'ascending stairs':act_acc[:,0],'balance, left': act_acc[:, 1], 'balance, right': act_acc[:, 2],'descending stairs':act_acc[:,3],'standing':act_acc[:, 4], 'toe-ups': act_acc[:, 5], 'walking': act_acc[:, 6]}
+            plot_data2 = {'ascending stairs': final_confusion[:,0],'balance, left': final_confusion[:, 1], 'balance, right': final_confusion[:, 2],'descending stairs': final_confusion[:,3], 'standing': final_confusion[:, 4],'toe-ups': final_confusion[:, 5], 'walking': final_confusion[:, 6]}
+            plot_data2 = pandas.DataFrame(plot_data2, columns =['ascending stairs','balance, left', 'balance, right','descending stairs', 'standing', 'toe-ups', 'walking'], index = ['ascending stairs','balance, left', 'balance, right','descending stairs', 'standing', 'toe-ups', 'walking'])
+
+
+        plot_data = pandas.DataFrame.from_dict(plot_data)
+
+
+
+        sns.boxplot(data=plot_data)
+        plt.ylabel('testing accuracy')
+        plt.xticks(rotation = 45)
+        plt.tight_layout()
+        #plt.savefig('boxplot, 5 activity testing accuracy, initial')
+        plt.show()
+
+
+
+
+
+        sns.heatmap(plot_data2, annot = True, cmap = 'YlGn')
+
+        plt.xlabel('actual class')
+        plt.ylabel('predicted class')
+        plt.yticks(rotation = 0)
+        plt.xticks(rotation = 45)
+        plt.tight_layout()
+        plt.savefig('confusion matrix heatmap, 5act')
+        plt.show()
+
+
+        '''
+        plt.bar(x_labels,mean_act_acc,yerr = std_act_acc)
+        #plt.xlabel('Activity')
+        plt.ylabel('Testing Accuracy')
+        plt.title('Testing Accuracy For Each Activity (5 activity RNN, wider architecture, lower learning rate)')
+        plt.xticks(rotation = 45)
+        plt.tight_layout()
+        plt.savefig('testing accuracy for each activity averaged, 5 activity RNN, wider architecture, lower learning rate')
+        plt.show()
+        '''
+        loo_acc_mean = np.mean(loo_acc)
+        loo_acc_std = np.std(loo_acc)
+
+
+        plt.bar(loo_list,loo_acc)
+        plt.xlabel('Subject')
+        plt.ylabel('Testing Accuracy')
+        plt.title('Testing Accuracy For Each LOO Test (5 activity RNN, initial)')
+        #plt.savefig('Testing accuracy for each LOO test bigLOO, 5 activity RNN,initial')
+        plt.show()
+
+
+        plt.bar(0,loo_acc_mean, width = 0.4, yerr = loo_acc_std)
+        plt.xlabel('')
+        plt.ylabel('Mean Accuracy')
+        plt.title('Mean Testing Accuracy Over All Subjects (5 activity RNN, initial)')
+        #plt.savefig('mean testing accuracy over all subjects bigLOO, 5 activity RNN, initial')
+        plt.show()
+
+        plt.errorbar(x,mean_val_acc,std_val_acc)
+        plt.xlabel('Epoch')
+        plt.ylabel('Validation Accuracy')
+        plt.title('LOO Validation Accuracy (5 activity RNN, initial)')
+        #plt.savefig('Leave one out validation accuracy bigLOO, 5 activity RNN, initial')
+        plt.show()
+
+        plt.errorbar(x,mean_train_acc,std_train_acc)
+        plt.xlabel('Epoch')
+        plt.ylabel('Training Accuracy')
+        plt.title('LOO Training Accuracy (5 activity RNN, initial)')
+        #plt.savefig('training accuracy bigLOO')
+        plt.show()
+
+        plt.errorbar(x,mean_val_loss,std_val_loss)
+        plt.xlabel('Epoch')
+        plt.ylabel('Validation Loss')
+        plt.title('LOO Validation Loss (5 activity RNN,initial)')
+        #plt.savefig('validation loss bigLOO, 5 activity RNN, initial')
+        plt.show()
+        #, wider architecture, lower learning rate
+        plt.errorbar(x,mean_train_loss,std_train_loss)
+        plt.xlabel('Epoch')
+        plt.ylabel('Training Loss')
+        plt.title('LOO Training Loss (5 activity RNN, initial)')
+        #plt.savefig('training loss bigLOO, 5 activity RNN, initial')
+        plt.show()
+
+
+        return median_act_acc,iqr_act_acc, stats_activity_list,stats_model_list,mean_val_loss,std_val_loss, mean_val_acc,std_val_acc, loo_acc_mean,loo_acc_std, final_confusion
+
+
+    #def plot_accuracy(self,modelList):
+
+
+    def plot_performance_single(self,modelList,historyList,label,data,ind_list,loo_list):
+        val_acc = np.zeros((len(historyList),len(historyList[0]['acc'])))
+        val_loss = np.zeros((len(historyList),len(historyList[0]['acc'])))
+        x = []
+        z = []
+        for i in range(len(historyList[0]['acc'])):
+            x.append(i)
+        for i in range(len(historyList)):
+            z.append(i)
+        for i in range(len(historyList)):
+            val_acc[i] = historyList[i]['val_acc']
+            val_loss[i] = historyList[i]['val_loss']
+
+        eval_ = []
+        for i in range(len(modelList)):
+            loo_index = loo_list[i]
+            inds = ind_list[i]
+            _, _, x_test, y_test = NN.clean_data(data, label, inds, loo_index)
+            eval = modelList[i].evaluate(x_test, y_test)
+            eval_.append(eval[-1])
+
+
+        plt.bar(['unknown','0','10','25','40', '100', '66'], eval_)
+        plt.xlabel('starting seeds')
+        plt.ylabel('testing accuracy')
+        plt.title('testing accuracies on LOO 15 with different starting seeds')
+        plt.savefig('testing accuracies on LOO 15 with different starting seeds')
+        plt.show()
+
+        #val_acc = np.transpose(val_acc)
+
+        line1, = plt.plot(x,val_acc[0], label = 'seed = unknown' )
+        line2, = plt.plot(x,val_acc[1],label = 'seed = 0')
+        line3, = plt.plot(x,val_acc[2],label = 'seed = 10')
+        line4, = plt.plot(x, val_acc[3],label = 'seed = 25')
+        line5, = plt.plot(x,val_acc[4],label = 'seed = 40')
+        line6, = plt.plot(x, val_acc[5],label = 'seed = 100')
+        line7, = plt.plot(x, val_acc[6],label = 'seed = 66')
+        plt.xlabel('epoch')
+        plt.ylabel('validation accuracy')
+        plt.title('validation accuracy for different starting seeds')
+        plt.legend(loc='lower right')
+        plt.savefig('validation accuracy different starting seeds')
+        plt.show()
+
+        line1, = plt.plot(x, val_loss[0], label = 'seed = unknown')
+        line2, = plt.plot(x, val_loss[1],label = 'seed = 0')
+        line3, = plt.plot(x, val_loss[2], label = 'seed = 10')
+        line4, = plt.plot(x, val_loss[3],label = 'seed = 25')
+        line5, = plt.plot(x, val_loss[4], label = 'seed = 40')
+        line6, = plt.plot(x, val_loss[5], label = 'seed = 100')
+        line7, = plt.plot(x, val_loss[6], label = 'seed = 66')
+        plt.xlabel('epoch')
+        plt.ylabel('validation loss')
+        plt.title('validation loss for different starting seeds')
+        plt.legend(loc='upper right')
+        plt.savefig('validation loss for different starting seeds')
+        plt.show()
+
+
+
+
+
+
+    def test_activity_stats(self,activity_list):
+        is_normal = True
+
+
+        activity_list = np.asarray(activity_list)
+
+        for i in range(self.num_activities):
+            testStat,Pvalue = stats.normaltest(activity_list[:,i])
+            if Pvalue < 0.05:
+                is_normal = False
+
+        stat_test = []
+
+        if self.num_activities == 5:
+            if is_normal == True:
+                stat, pvalue = stats.f_oneway(activity_list[:,0],activity_list[:,1],activity_list[:,2],activity_list[:,3],activity_list[:,4])
+            else:
+                stat, pvalue = stats.kruskal(activity_list[:,0],activity_list[:,1],activity_list[:,2],activity_list[:,3],activity_list[:,4])
+        if self.num_activities == 6:
+            if is_normal == True:
+                stat, pvalue = stats.f_oneway(activity_list[:, 0], activity_list[:, 1], activity_list[:, 2],activity_list[:, 3], activity_list[:, 4],activity_list[:,5])
+
+            else:
+                stat, pvalue = stats.kruskal(activity_list[:, 0], activity_list[:, 1], activity_list[:, 2],activity_list[:, 3], activity_list[:, 4],activity_list[:,5])
+
+
+        if self.num_activities == 7:
+            if is_normal == True:
+                stat, pvalue = stats.f_oneway(activity_list[:, 0], activity_list[:, 1], activity_list[:, 2],activity_list[:, 3], activity_list[:, 4],activity_list[:,5],activity_list[:,6])
+
+            else:
+                stat, pvalue = stats.kruskal(activity_list[:, 0], activity_list[:, 1], activity_list[:, 2],activity_list[:, 3], activity_list[:, 4],activity_list[:,5],activity_list[:,6])
+
+
+
+        if pvalue > 0.05:
+            return ("pop not different")
+
+        for i in range(self.num_activities):
+            for j in range(self.num_activities):
+                if i == j:
+                    continue
+                else:
+                    statistic,pvalue2 = stats.wilcoxon(activity_list[:,i],activity_list[:,j])
+                    stat_test.append([i,j,statistic,pvalue2])
+        return stat_test
+
+    def test_model_stats(self,modelList1,modelList2):
+        is_normal = True
+
+        testStat, Pvalue = stats.normaltest(modelList1)
+        if Pvalue < 0.05:
+            is_normal = False
+
+        testStat, Pvalue = stats.normaltest(modelList2)
+        if Pvalue < 0.05:
+            is_normal = False
+        stat_test = []
+
+        if is_normal == True:
+            stat, pvalue = scipy.stats.f_oneway(modelList1,modelList2)
+        else:
+            stat, pvalue = scipy.stats.kruskal(modelList1,modelList2)
+
+        return pvalue
+
+if __name__ == '__main__':
+    data = np.load('data_normalized_5_20sub.npy')
+    label = np.load('label_normalized_5_20sub.npy')
+    NN = NN(learning_rate=5e-5, num_gru_cells=10, BATCH_SIZE=500, num_epochs=20)
+    # --- np.shape(label)[0] --- use this to iterate over all subjects
+    # for loo_ID in range(np.shape(label)[0]):
+    #
+    #     sd = 66  # reset seed each loop
+    #     np.random.seed(sd)
+    #     random.seed(sd)
+    #     os.environ['PYTHONHASHSEED'] = str(sd)
+    #     config = tf.ConfigProto(intra_op_parallelism_threads=1, inter_op_parallelism_threads=1)
+    #     tf.set_random_seed(sd)
+    #     sess = tf.Session(graph=tf.get_default_graph(), config=config)
+    #     K.set_session(sess)
+    #
+    #
+    #     #loo_ID = 15
+    #     ind = NN.loo_matrix(label,loo_ID)
+    #     x_train,y_train,x_test,y_test = NN.clean_data(data,label,ind,loo_ID)
+    #
+    #     shoe = NN.NN_create()
+    #     model,history = NN.train_NN(shoe,x_train,y_train,loo_ID)
+    #     model.evaluate(x_test,y_test,verbose = 2)
+    #     accuracy = NN.test_activities(model,x_test,y_test)
+
+    #___________________________
+    #below is for loading and plotting data, above is for training and analyzing NN
+
+    name = []
+    history = []
+    indList = []
+    loo_list = []
+    #_32Dense_1
+    for i in range(20):
+        name.append('loo_shoe__seed66_5ACT_20EPOCH_32Dense_1_'+str(i)+'.h5')
+        history.append('loo_history_seed66_5ACT_20EPOCH_32Dense_1_'+str(i))
+        indList.append(NN.loo_matrix(label, i))
+        loo_list.append(i)
+
+
+    modelList,historyList = NN.loader(name,history)
+    activity_stats,model_stats,mean_loss,std_loss,validation_list,validation_std_list, testing_mean,testing_std, final_confusion = NN.plot_performance_all(modelList,historyList,label,data,indList,loo_list)
+    __stats_info__ = NN.test_activity_stats(activity_stats)
+
+    #below is for comparing the statistics for two archetectures
+    #-------------------------------------------------
+    #
+    #
+    # name = []
+    # history = []
+    # indList = []
+    # loo_list = []
+    # for i in range(20):
+    #     name.append('loo_shoe_' + str(i) + '.h5')
+    #     history.append('loo_history_' + str(i))
+    #     indList.append(NN.loo_matrix(label, i))
+    #     loo_list.append(i)
+    # modelList1, historyList1 = NN.loader(name, history)
+    # _,model_stats1,_,_,_,_, _,_, _ = NN.plot_performance_all(modelList1,historyList1,label,data,indList,loo_list)
+    #
+    #
+    # name = []
+    # history = []
+    # indList = []
+    # loo_list = []
+    # for i in range(20):
+    #     name.append('loo_shoe__seed66_6ACT_20EPOCH_' + str(i) + '.h5')
+    #     history.append('loo_history_seed66_6ACT_20EPOCH_' + str(i))
+    #     indList.append(NN.loo_matrix(label, i))
+    #     loo_list.append(i)
+    #
+    # modelList2, historyList2 = NN.loader(name, history)
+    # _, model_stats2, _, _, _, _, _, _, _ = NN.plot_performance_all(modelList2, historyList2, label, data, indList, loo_list)
+    #
+    # p_value = NN.test_model_stats(model_stats1,model_stats2)
+    #
+
+
+    #----------------------------------------------
+    #below is for plotting the different seed tests
+
+    # name = []
+    # history = []
+    # indList = []
+    # loo_list = []
+    # history.append('loo_history_15')
+    # history.append('loo_history_seed015')
+    # history.append('loo_history_seed1015')
+    # history.append('loo_history_seed2515')
+    # history.append('loo_history_seed4015')
+    # history.append('loo_history_seed10015')
+    # history.append('loo_history_seed6615')
+    #
+    # name.append('loo_shoe_15.h5')
+    # name.append('loo_shoe_seed015.h5')
+    # name.append('loo_shoe_seed1015.h5')
+    # name.append('loo_shoe_seed2515.h5')
+    # name.append('loo_shoe_seed4015.h5')
+    # name.append('loo_shoe_seed10015.h5')
+    # name.append('loo_shoe_seed6615.h5')
+    #
+    # modelList,historyList = NN.loader(name,history)
+    # for i in range(len(historyList)):
+    #     loo_list.append(15)
+    #     indList.append(NN.loo_matrix(label,15))
+    #
+    # NN.plot_performance_single(modelList,historyList,label,data,indList,loo_list)
