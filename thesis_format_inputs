@@ -1,0 +1,111 @@
+import csv
+import os
+import pandas
+import numpy
+import pickle
+
+namelist = ['PAR_001', "PAR_002", 'PAR_003','PAR_004', 'PAR_005', 'PAR_006', 'PAR_007','PAR_008', 'PAR_009', 'PAR_010',\
+            'PAR_011', 'PAR_012', 'PAR_013', 'PAR_014', 'PAR_015', 'PAR_016','PAR_017', 'PAR_018', 'PAR_019', 'PAR_020']
+activitylist = ['ascending1','ascending2','ascending3','balanceleft','balanceright','descending1','descending2',\
+                'descending3','sitdown1','sitdown2','sitdown3', 'sitdown4', 'sitdown5', 'sitdown6', 'sitdown7',\
+                'sitdown8', 'sitdown9', 'sitdown10', 'standup1', 'standup2', 'standup3', 'standup4', 'standup5',\
+                'standup6', 'standup7', 'standup8', 'standup9', 'standup10', 'standing', 'squats', 'toeups', \
+                'tandemleft','tandemright', 'walking1','walking2', 'walking3', 'walking4']
+data_dict = {}
+freq = 50
+timewindow = 1
+j=0
+k = 0
+dataStack = []
+stacking = True
+
+for name in namelist:
+    for activity in activitylist:
+        if os.path.exists('./data_inputs/'+name+'/'+name+'_'+activity+'.csv'):
+
+            data1 = (pandas.read_csv('./data_inputs/' + name + '/' + name + '_' + activity + '.csv', header = None,nrows = 1))
+            data2 = (pandas.read_csv('./data_inputs/' + name + '/' + name + '_' + activity + '.csv', header = None,skiprows = 1,nrows = 2))
+
+            data1 = data1.transpose()
+            data2 = data2.transpose()
+            length_data = min(len(data1),len(data2))
+
+            data = [data1[0:length_data], data2[0:length_data]]
+            #data = data.transpose()
+
+            if activity[:-1] == 'ascending':
+                label = 0
+            elif activity == 'balanceleft':
+                label = 1
+            elif activity == 'balanceright':
+                label = 2
+            elif activity[:-1] == "descending":
+                label = 3
+            elif activity[:-1] == 'sitdown':
+                label = 4
+            elif activity[:-1] == 'standup':
+                label = 5
+            elif activity == 'standing':
+                label = 6
+            elif activity == 'squats':
+                label = 7
+            elif activity == 'toeups':
+                label = 8
+            elif activity == 'tandemleft':
+                label = 9
+            elif activity == 'tandemright':
+                label = 10
+            elif activity[:-1] == 'walking':
+                label = 11
+
+
+            samples = freq*timewindow
+            j = 0
+            k = 0
+            dataStack = []
+            stacking = True
+
+            while stacking == True:
+
+                if j+samples >= len(data[0]):
+                    stacking = False
+                    break
+                if (data[0].iloc[j:j+samples].isnull().any()).bool() | (data[1].iloc[j:j+samples].isnull().any()).bool():
+                    stacking = False
+                    break
+                dataStack.append([data[0][j:j+samples], data[1][j:j+samples]])
+                j = j+1
+                #print(j)
+
+
+            print(name)
+            print(activity)
+            if (name,label) in data_dict.keys():
+                data_dict[name, label].extend(dataStack)
+            else:
+                data_dict[name,label] = dataStack
+
+        else:
+            continue
+'''
+pickle.dump(data_dict,open( "master_data.p", "wb" ))
+'''
+
+keys = list(data_dict.keys())
+key_names = keys[0]
+key_labels = keys[1]
+pickling = True
+subset_data_dict = {}
+for j in range(12):
+    #print(j)
+    subset_data_dict = {}
+    for i in range(len(keys)):
+        if keys[i][1] == j:
+            subset_data_dict[keys[i]] = data_dict[keys[i]]
+    label = j
+    print(subset_data_dict.keys())
+    print(label)
+    with open( "master_data"+'_label_'+str(label)+".p", "wb" ) as fname:
+        pickle.dump(subset_data_dict,fname, protocol = pickle.HIGHEST_PROTOCOL)
+
+
