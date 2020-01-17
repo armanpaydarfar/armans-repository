@@ -1,0 +1,125 @@
+import pandas as pandas
+
+import Tools.Utils as tu
+import matplotlib.pyplot as plt
+import pandas
+import csv
+import os
+import shutil
+import numpy
+import difflib
+
+#DONT FORGET TO SET PANDAS FREQUENCY TO 50 HZ, STANDARD IS 200HZ
+
+
+template = pandas.read_excel("./data/data_segmentation_template.xlsx")
+
+
+
+subject = template[["subject"]]
+filename = template[["activity id"]]
+lower_bound = template[["cut time before"]]
+upper_bound = template[["cut time after"]]
+name_last = None
+activitylist = ['ascending1','ascending2','ascending3','balanceleft','balanceright','descending1','descending2',\
+                'descending3','sitdown1','sitdown2','sitdown3', 'sitdown4', 'sitdown5', 'sitdown6', 'sitdown7',\
+                'sitdown8', 'sitdown9', 'sitdown10', 'standup1', 'standup2', 'standup3', 'standup4', 'standup5',\
+                'standup6', 'standup7', 'standup8', 'standup9', 'standup10', 'standing', 'squats', 'toeups', \
+                'tandemleft','tandemright', 'walking1','walking2', 'walking3', 'walking4']
+
+for i in range(len(subject)):
+
+    name = subject.get_value(i, "subject")
+
+    activity_id = filename.get_value(i, "activity id")
+    x_lower = lower_bound.get_value(i, "cut time before")
+    x_upper = upper_bound.get_value(i, "cut time after")
+
+
+    [r, _] = tu.binaryFile2python("./data/"+name+"/"+name+"_"+activity_id+"_R.bin")
+    r.createPandasDataFrame()
+
+    right_foot = r.dataFrame[["pBall","pHeel","pToe"]]
+
+    [_, l] = tu.binaryFile2python("./data/"+name+"/"+name+"_"+activity_id+"_L.bin")
+
+    l.createPandasDataFrame()
+
+    left_foot = l.dataFrame[["pBall", "pHeel", "pToe"]]
+
+    data = [right_foot, left_foot]
+
+    xl = pandas.to_datetime([x_lower])
+    xr = pandas.to_datetime([x_upper])
+    #xl = str(x_lower)
+    #xr = str(x_upper)
+    #data[0].between_time(xl, xr)
+    data_tosave = [data[0].loc[x_lower:x_upper], data[1].loc[x_lower:x_upper]]
+    savedata = [numpy.asarray(data_tosave[0]), numpy.asarray(data_tosave[1])]
+    if len(savedata[0]) <= 10 or len(savedata[1]) <=10:
+        print(name)
+        print(activity_id)
+        continue
+
+    if name_last != name:
+        try:
+            os.mkdir("./data_inputs/" + name)
+            print("created new dir")
+            print(name)
+        except:
+            shutil.rmtree('./data_inputs/' + name)
+            #os.rmdir("./data_inputs/" + name)
+            os.mkdir("./data_inputs/" + name)
+
+            print("removed_folder, reinitialized:")
+            print(name)
+        finally: print(" ")
+
+
+
+    if activity_id not in activitylist:
+        close_match = difflib.get_close_matches(activity_id, activitylist, 5)
+        activity_id = close_match[0]
+
+
+    with open("./data_inputs/"+name+"/"+name+"_"+activity_id+".csv", 'w') as csvFile:
+        writer = csv.writer(csvFile)
+        writer.writerows(savedata)
+
+    csvFile.close()
+
+    name_last = name
+
+
+#data_tosave.to_CSV("./data_inputs/"+name+"/"+name+"_"+activity_id)
+
+
+
+'''
+
+for i in range(size):
+    name = subject.get_value(i, "subject")
+    activity_id = filename.get_value(i, "activity id")
+    x_lower = lower_bounds.get_value(i, "cut time before")
+    x_upper = upper_bounds.get_value(i, "cut time after")
+
+    new_data_file = [r,l] = tu.binaryFile2python(./data/name/activity_id)
+    
+    
+    print(subject.get_value(1, "subject"))
+
+
+
+
+[r,_] = tu.binaryFile2python()
+
+
+[_,l] = tu.binaryFile2python()
+
+
+r.createPandasDataFrame()
+
+toe = r.dataFrame[['pToe']]
+
+press = r.dataFrame[['pToe', 'pBall', 'pHeel']]
+'''
