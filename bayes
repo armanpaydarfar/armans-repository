@@ -1,0 +1,151 @@
+import numpy as np
+
+class Node(object):
+    def __init__(self, name, parents, probs):
+        self.name = name
+        self.parents = parents
+        self.probs = probs
+
+    def __str__(self):
+        return self.name
+
+    # Returns probability distribution of node conditioned on parents.
+    # If assignment does not contain all of node.parents, return [0, 0].
+    def prob_given_parents(self, assignment):
+        parent_values = []
+        for parent in self.parents:
+            parent_values.append(assignment[parent.name])
+        if tuple(parent_values) in self.probs:
+            prob = self.probs[tuple(parent_values)]
+            return [prob, 1-prob]
+        return [0, 0]
+
+
+class BayesNet(object):
+    def __init__(self, nodes):
+        self.nodes = nodes
+
+    """YOUR CODE STARTS HERE"""
+
+
+    # Returns a sample {node.name: value} computed using rejection sampling.
+    # If sampled variables are not consistent with evidence, return None instead.
+    def rejection_sample(self, evidence):
+        
+        sample = {}
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+            prob_dist = node.prob_given_parents(sample)
+            w_choice = np.random.choice([True, False],p = prob_dist)
+            
+            
+            sample[node.name] = w_choice
+
+            if node.name in evidence and sample[node.name] != evidence[node.name]:
+                return None 
+            
+        return sample
+
+
+    # Returns a sample {node.name: value} and weight computed using likelihood weighting.
+    def weighted_sample(self, evidence):
+        sample = {}
+        weight = 1.0
+        
+        
+        sample = {}
+        for i in range(len(self.nodes)):
+            node = self.nodes[i]
+
+            prob_dist = node.prob_given_parents(sample)
+            w_choice = np.random.choice([True, False],p = prob_dist)
+                        
+            if node.name not in evidence:
+                sample[node.name] = w_choice
+                
+            else:
+                val = evidence[node.name]
+                sample[node.name] = val
+                val = 1-int(val)
+                prob = prob_dist[val]
+                weight = weight*prob
+                
+        
+        return sample, weight
+
+
+    # Returns a sample {node.name: value} computed using Gibbs sampling.
+    # Returned sample should be identical to given sample, except value of node is resampled.
+    def Gibbs_sample(self, node, sample):
+        childList = []
+        for i in range(len(self.nodes)):
+            if node in self.nodes[i].parents:
+                childList.append(self.nodes[i])
+        P = [1,1]
+        P_val = [1,1]
+        prob = [1,1]
+        p_x_i = node.prob_given_parents(sample)
+        sample_T = sample.copy()
+        sample_T[node.name] = True
+        sample_F = sample.copy()
+        sample_F[node.name] = False
+        for i in range(len(childList)):
+            childVal = 1 - int(sample[childList[i].name])
+            P_T = childList[i].prob_given_parents(sample_T)
+            P_F = childList[i].prob_given_parents(sample_F)
+            
+            P_T_val = P_T[childVal]
+            P_F_val = P_F[childVal]
+            
+            P_val[0] = P_T_val
+            P_val[1] = P_F_val
+            
+            P[0] = P[0]*P_val[0]
+            P[1] = P[1]*P_val[1]
+            
+        prob[0] = p_x_i[0]*P[0]
+        prob[1] = p_x_i[1]*P[1]
+        sum_ = prob[0]+prob[1]
+        prob[0] = prob[0]/sum_  
+        prob[1] = prob[1]/sum_
+        
+        choice = np.random.choice([True,False], p=prob)
+        
+        sample[node.name] = choice
+        return sample
+
+
+    """YOUR CODE STOPS HERE"""
+
+    def infer(self, query, evidence, N, method):
+        count = 0.0
+        effective = 0.0
+        weight = 1
+        index = 0
+
+        # initialize a random sample for Gibbs sampling
+        if method == 'Gibbs':
+            sample = {}
+            nonevidence = []
+            for node in self.nodes:
+                if node.name in evidence:
+                    sample[node.name] = evidence[node.name]
+                else:
+                    sample[node.name] = np.random.choice([True, False])
+                    nonevidence.append(node)
+
+        for i in range(N):
+            if method == 'rejection':
+                sample = self.rejection_sample(evidence)
+                if sample is None:
+                    continue
+            elif method == 'likelihood':
+                sample, weight = self.weighted_sample(evidence)
+            elif method == 'Gibbs':
+                node = nonevidence[index]
+                sample = self.Gibbs_sample(node, sample)
+                index = (index + 1) % len(nonevidence)
+            effective += weight
+            if sample[query]: count += weight
+
+        return count/effective, effective
