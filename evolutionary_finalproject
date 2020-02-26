@@ -1,0 +1,366 @@
+
+from visual import*
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+import random
+
+masslist=[]
+springlist=[]
+pot = []
+ks=500
+dt=0.001
+damp = 0.997
+mass_ext1=3
+extdir1=[1,0,0]
+extmag1=0
+mass_ext2=2
+extdir2=[-1,0,0]
+extmag2=0
+mu = 0.5
+
+
+
+
+class mass():
+    def __init__(self,mass,pos,index,vel=None,acc=None):
+        self.mass=mass
+        self.pos=pos
+        self.vel=vel
+        self.acc=acc
+        self.index=index
+        
+class spring():
+    def __init__(self,k,p1,p2):
+        self.k=k
+        self.lo=dist(p1,p2)
+        self.p1=p1
+        self.p2=p2
+
+class force():
+    def __init__(self,direc=None,mag=None):
+        self.dir=direc
+        self.mag=mag
+
+def dist(ind1,ind2):
+    for i in range(len(masslist)):
+        if(masslist[i].index==ind1):
+            pos1=masslist[i].pos
+        if(masslist[i].index==ind2):
+            pos2=masslist[i].pos
+    dist=((pos1[0]-pos2[0])**2+(pos1[1]-pos2[1])**2+(pos1[2]-pos2[2])**2)**0.5
+    return dist
+  
+def breathe(springlist,T,b,c):
+    
+    
+    springlist[0].lo = springlist[0].lo+b[0]*np.sin(5*T*pi+c[0])
+    springlist[1].lo = springlist[1].lo+b[1]*np.sin(5*T*pi+c[1])
+    springlist[2].lo = springlist[2].lo + b[2]*np.sin(5*T*pi+c[2])
+    springlist[3].lo = springlist[3].lo+b[3]*np.sin(5*T*pi+c[3])
+  
+def gravity(m):
+    grav_force=force([0,0,-1])
+    grav_force.mag=9.81*m.mass
+    return grav_force
+
+def draw():
+    massdrawlist = []
+    cylinderlist = []
+    for i in range(0,len(masslist)): 
+        if i==1:
+            mass_draw = sphere(pos=vector(masslist[i].pos[0],masslist[i].pos[1],masslist[i].pos[2]),radius = 0.02,color=color.red) 
+        else:
+            mass_draw = sphere(pos=vector(masslist[i].pos[0],masslist[i].pos[1],masslist[i].pos[2]),radius = 0.02,color=color.red)    
+        massdrawlist.append(mass_draw)
+    for j in range(0,len(springlist)):
+        ind1 = springlist[j].p1
+        ind2 = springlist[j].p2
+        loc1 = masslist[ind1-1].pos
+        loc2 = masslist[ind2-1].pos
+        cylinder_origin = loc1
+        cylinder_axis = np.subtract(loc2,loc1)
+        rod = cylinder(pos = (loc1[0],loc1[1],loc1[2]),axis = (cylinder_axis[0],cylinder_axis[1],cylinder_axis[2]),radius = 0.005,color=color.green)
+        cylinderlist.append(rod)
+    return massdrawlist,cylinderlist
+
+def attached_springs(mass):
+    attsprings=[]
+    for i in range(len(springlist)):
+        if (springlist[i].p1 == mass) or (springlist[i].p2==mass):                 
+            attsprings.append(springlist[i])
+    return attsprings        
+
+                    
+def forcespring(massnumber):
+    attachedsprings = attached_springs(massnumber)
+    F_list = []
+    F_x=0
+    F_y=0
+    F_z =0
+    F_spring=[]
+    if attachedsprings[0].p1 == attachedsprings[1].p1 or attachedsprings[0].p1 == attachedsprings[1].p2:
+        ind1 = attachedsprings[0].p1
+    else:
+        ind1 = attachedsprings[0].p2 
+    for i in range(0,len(attachedsprings)):
+        if ind1 == attachedsprings[i].p1:
+            ind2 =  attachedsprings[i].p2
+        else:
+            ind2 = attachedsprings[i].p1    
+        lengthvec = np.subtract(masslist[ind2-1].pos,masslist[ind1-1].pos)
+        direc =np.divide(lengthvec, np.linalg.norm(lengthvec))
+        length = dist(ind1,ind2)                
+        mag =  attachedsprings[i].k*(length-attachedsprings[i].lo)
+        F =force(direc,mag)
+        F_spring.append(F)
+
+    for j in range(0,len(F_spring)):
+        F_components = np.dot(F_spring[j].mag,F_spring[j].dir)
+        F_list.append(F_components) 
+    for k in range(0,len(F_list)):
+        F_x += F_list[k][0]   
+        F_y += F_list[k][1]
+        F_z += F_list[k][2]        
+    mag = np.sqrt(F_x**2+F_y**2+F_z**2)
+    if mag == 0:
+          direc = [0.0,0.0,0.0]              
+    else:
+        direc = [np.divide(F_x,mag), np.divide(F_y,mag),np.divide(F_z,mag)]
+    F_spring = force(direc,mag)
+    return F_spring
+
+def collision_force(mass):
+    k = 1000000
+    if mass.pos[2] < 0:
+        F_z = k*mass.pos[2]**2
+    else:
+        F_z = 0
+    mag = F_z
+    direc = [0,0,1]
+    F_collision = force(direc,mag)
+    return F_collision
+    
+def sumForces(mass,F_spring,grav_force,F_collision,F_ext1,F_ext2):
+    F_s = np.dot(F_spring.mag,F_spring.dir)
+    F_g = np.dot(grav_force.mag,grav_force.dir)
+    F_c = np.dot(F_collision.mag,F_collision.dir)
+    F_e1 = np.dot(F_ext1.mag,F_ext1.dir)
+    F_e2 = np.dot(F_ext2.mag,F_ext2.dir)    
+    F_sumx = F_s[0]+F_g[0]+F_c[0]+F_e1[0]+F_e2[0]
+    F_sumy = F_s[1]+F_g[1]+F_c[1]+F_e1[1]+F_e2[1]
+    F_sumz = F_s[2]+F_g[2]+F_c[2]+F_e1[2]+F_e2[2]
+    F_sum = [F_sumx,F_sumy,F_sumz]    
+    if (np.sqrt(F_sumx**2+F_sumy**2) <= np.abs(F_sumz*mu) and mass.pos[2]<=0):
+        friction = 0
+    else:
+        friction=1        
+    return F_sum,friction
+
+def updateStats(mass,F_sum,fric):    
+    ax = F_sum[0]/mass.mass
+    ay = F_sum[1]/mass.mass
+    az = F_sum[2]/mass.mass    
+    if fric==1:
+        mass.vel[0] = damp*(mass.vel[0]+ax*dt)
+        mass.vel[1] =damp*(mass.vel[1]+ay*dt)
+        mass.vel[2] = damp*(mass.vel[2]+az*dt)    
+        mass.pos[0]=mass.pos[0]+mass.vel[0]*dt
+        mass.pos[1]=mass.pos[1]+mass.vel[1]*dt
+        mass.pos[2]=mass.pos[2]+mass.vel[2]*dt
+    
+def updatedraw(massdrawlist,cylinderlist):   
+    for i in range(0,len(massdrawlist)):
+        massdrawlist[i].pos = masslist[i].pos
+    for j in range(0,len(cylinderlist)):
+        ind1 = springlist[j].p1
+        ind2 = springlist[j].p2
+        loc1 = masslist[ind1-1].pos
+        loc2 = masslist[ind2-1].pos
+        cylinder_origin = loc1
+        cylinder_axis = np.subtract(loc2,loc1)
+        cylinderlist[j].pos = loc1
+        cylinderlist[j].axis = cylinder_axis
+    return massdrawlist,cylinderlist
+
+def potential(mass):
+    if(mass.pos[2]>0):
+        pot.append(mass.mass*9.81*mass.pos[2])
+    else:
+        pot.append(0)
+
+def kinetic(mass):
+    v=np.sqrt(mass.vel[0]**2+mass.vel[1]**2+mass.vel[2]**2)
+    kin.append(mass.mass*0.5*v)
+    
+def springP(spring):
+    lengthvec = np.subtract(masslist[spring.p1-1].pos,masslist[spring.p2-1].pos)
+    dist=np.linalg.norm(lengthvec)
+    spr.append(0.5*spring.k*(dist**2))
+
+def center_of_mass():
+    COM = np.zeros(3)
+    total_mass = 0
+    for i in range(0,len(masslist)):
+        COM[0] = COM[0]+masslist[i].mass*masslist[i].pos[0]
+        COM[1] = COM[1]+masslist[i].mass*masslist[i].pos[1]
+        COM[2] = COM[2]+masslist[i].mass*masslist[i].pos[2]
+        total_mass = total_mass+masslist[i].mass
+    COM = np.divide(COM,total_mass)    
+    return COM
+        
+def updateSpring(k):
+    for i in range(0,len(springlist)):
+        spring.k = k[i]
+
+def evolve(i,k,b,c)
+    if i>=0 and i<4:
+        
+    
+   
+   
+   
+   
+   
+   
+for i in range(10):        
+    #TETREHADRON
+        
+    m1=mass(1,[0,0,0],1,[0.0,0.0,0.0])
+    m2=mass(1,[0.1,0.1,0],2,[0.0,0.0,0.0])
+    m3=mass(1,[0.1,0,0.1],3,[0.0,0.0,0.0])
+    m4=mass(1,[0,0.1,0.1],4,[0.0,0.0,0.0])
+    masslist=[m1,m2,m3,m4]
+    s1=spring(ks,1,2)
+    s2=spring(ks,1,3)
+    s3=spring(ks,1,4)
+    s4=spring(ks,2,3)
+    s5=spring(ks,2,4)
+    s6=spring(ks,3,4)
+    springlist=[s1,s2,s3,s4,s5,s6]
+    '''
+    
+    m1=mass(0.1,[0,0,0],1,[0.0,0.0,0.0])
+    m2=mass(0.1,[0.1,0,0],2,[0.0,0.0,0.0])
+    m3=mass(0.1,[0.1,0.1,0],3,[0.0,0.0,0.0])
+    m4=mass(0.1,[0,0.1,0],4,[0.0,0.0,0.0])
+    m5=mass(0.1,[0,0,0.1],5,[0.0,0.0,0.0])
+    m6=mass(0.1,[0.1,0,0.1],6,[0.0,0.0,0.0])
+    m7=mass(0.1,[0.1,0.1,0.1],7,[0.0,0.0,0.0])
+    m8=mass(0.1,[0,0.1,0.1],8,[0.0,0.0,0.0])
+    masslist=[m1,m2,m3,m4,m5,m6,m7,m8]
+    
+    s1=spring(ks,1,2)
+    s2=spring(ks,1,3)
+    s3=spring(ks,1,4)
+    s4=spring(ks,1,5)
+    s5=spring(ks,1,6)
+    s6=spring(ks,1,7)
+    s7=spring(ks,1,8)
+    s8=spring(ks,2,3)
+    s9=spring(ks,2,4)
+    s10=spring(ks,2,5)
+    s11=spring(ks,7,8)#out of order
+    s12=spring(ks,2,6)
+    s13=spring(ks,2,7)
+    s14=spring(ks,2,8)
+    s15=spring(ks,3,4)
+    s16=spring(ks,3,5)
+    s17=spring(ks,3,6)
+    s18=spring(ks,3,7)
+    s19=spring(ks,3,8)
+    s20=spring(ks,4,5)
+    s21=spring(ks,4,6)
+    s22=spring(ks,4,7)
+    s23=spring(ks,4,8)
+    s24=spring(ks,5,6)
+    s25=spring(ks,5,7)
+    s26=spring(ks,5,8)
+    s27=spring(ks,6,7)
+    s28=spring(ks,6,8)
+    springlist=[s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16,s17,s18,s19,s20,s21,s22,s23,s24,s25,s26,s27,s28]
+    '''
+    
+    vx = 0
+    vy=0
+    vz=0
+    T=0
+    F_sum=[]
+    F_sumlist=[]
+    frict = []
+    COMlist = []
+    #start loop here
+    display(title = 'spring-mass system',forward = [0,1,-1],up = [0,0,1], x = 0,y=0,height=15,width =15,center = [0,0,0],backround=[0,0,1],range = 0.5)
+    box(pos = (0,0,0),length = 0.5,width = 0.001,height = 0.5,color = color.white)
+    massdrawlist,cylinderlist = draw()
+    #scene = canvas(center = vector(0,0,0.15), forward = vector(0,1,0),up = vector(0,0,1),range = 2*center)
+    COM_1 = center_of_mass()
+    if i ==1:
+        b = 0.01*np.random.rand(len(springlist),)-0.005
+        c = 0.1*np.random.rand(len(springlist),)-0.05
+        k = 50000*np.random.rand(len(springlist),)
+    else:
+        b,c,k = evolve(i,b,c,k)        
+        
+    updateSpring(k)
+    max_fitness=0
+    T=0
+    while T<1:
+        rate(100)   
+        F_sumlist = []
+        frictList = []
+        
+        #print(masslist[1].pos[2])
+        for i in range(0,len(masslist)):
+        
+            F_spring = forcespring(masslist[i].index)
+            F_gravity = gravity(masslist[i])
+            F_collision = collision_force(masslist[i])
+            
+            if(i==mass_ext1 and T <= 0.5):
+                F_ext1 = force(extdir1,extmag1)
+                F_ext2 = force([0,0,0],0)
+    
+            elif(i==mass_ext2 and T<=0.5):
+                F_ext2 = force(extdir2,extmag2)
+                F_ext1 = force([0,0,0],0)
+            else:
+                F_ext1 = force([0,0,0],0)
+                F_ext2 = force([0,0,0],0)
+            
+            F_s,frict = sumForces(masslist[i],F_spring,F_gravity,F_collision,F_ext1,F_ext2)
+            
+            frictList.append(frict)    
+           
+            F_sumlist.append(F_s)
+       # if(frict==1):
+        for j in range(0,len(masslist)):
+            stats = updateStats(masslist[j],F_sumlist[j],frictList[j])
+                
+                
+        '''
+        for i in range(len(masslist)):
+            potential(masslist[i])
+            kinetic(masslist[i])
+        for i in range(len(springlist)):
+            springP(springlist[i])
+        potential=np.array(potential)
+        kinetic=np.array(kinetic)
+        springP=np.array(springP)
+        Total=np.add(kinetic,springP)
+        TE=np.add(Total,potential)
+        print(TE)  
+        '''      
+        breathe(springlist,T,b,c)
+        massdrawlist,cylinderlist = updatedraw(massdrawlist,cylinderlist)
+        T = T+dt
+        #print(F_sumlist)
+        
+    COM_final = center_of_mass()
+    fitness = COM_final[0]-COM_1[0]
+    print(fitness)
+    if fitness>=max_fitness:
+        max_fitness=fitness
+        best_springlist=np.copy(springlist)
+print(max_fitness)
