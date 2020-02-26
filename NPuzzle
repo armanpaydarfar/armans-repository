@@ -1,0 +1,438 @@
+@author: Arman Paydarfar (AJP2246)
+"""
+
+import time
+
+def state_to_string(state):
+    row_strings = [" ".join([str(cell) for cell in row]) for row in state]
+    return "\n".join(row_strings)
+
+
+def swap_cells(state, i1, j1, i2, j2):
+    """
+    Returns a new state with the cells (i1,j1) and (i2,j2) swapped. 
+    """
+    value1 = state[i1][j1]
+    value2 = state[i2][j2]
+    
+    new_state = []
+    for row in range(len(state)): 
+        new_row = []
+        for column in range(len(state[row])): 
+            if row == i1 and column == j1: 
+                new_row.append(value2)
+            elif row == i2 and column == j2:
+                new_row.append(value1)
+            else: 
+                new_row.append(state[row][column])
+        new_state.append(tuple(new_row))
+    return tuple(new_state)
+
+
+def get_successors(state):
+    """
+    This function returns a list of possible successor states resulting
+    from applicable actions. 
+    The result should be a list containing (Action, state) tuples. 
+    For example [("Up", ((1, 4, 2),(0, 5, 8),(3, 6, 7))), 
+                 ("Left",((4, 0, 2),(1, 5, 8),(3, 6, 7)))] 
+    """
+    child_states = []
+
+    for row in range(len(state)):
+        for column in range(len(state[row])):
+            if state[row][column] == 0:
+                if column < len(state)-1: # Left
+                    new_state = swap_cells(state, row,column, row, column+1)
+                    child_states.append(("Left",new_state))
+                if column > 0: # Right
+                    new_state = swap_cells(state, row,column, row, column-1)
+                    child_states.append(("Right",new_state))
+                if row < len(state)-1:   #Up
+                    new_state = swap_cells(state, row,column, row+1, column)
+                    child_states.append(("Up",new_state))
+                if row > 0: # Down
+                    new_state = swap_cells(state, row,column, row-1, column)
+                    child_states.append(("Down", new_state))
+                break
+    return child_states
+
+            
+def goal_test(state):
+    """
+    Returns True if the state is a goal state, False otherwise. 
+    """    
+    counter = 0
+    for row in state:
+        for cell in row:
+            if counter != cell:
+                return False
+            counter += 1
+    return True
+
+   
+def bfs(state):
+    """
+    Breadth first search.
+    Returns four values: A path (list of actions), path cost, the number of states expanded,
+    and the maximum size of the frontier.
+    You should also have two mutable data structures:
+    - The frontier of nodes to expand (operating as a queue in BFS)
+    - A set of nodes already expanded
+    """
+
+
+    frontier = []
+    explored = set()
+    
+    #YOUR CODE HERE
+    parent_state = state    
+    states_expanded = 0
+    max_frontier = 0
+
+    search =  True 
+    parent_dict = {}
+    
+    
+    frontier_vector = []
+    
+    child_states = get_successors(parent_state)
+    #print(child_states)
+    
+    frontier.append(state)
+    explored.add(state)
+    j = 0
+    movelist = []
+    
+    while search == True:
+        construct_list = False
+       
+        for i in range(len(child_states)):
+        
+                
+            if goal_test(parent_state) == True:
+                current_child = parent_state
+                
+                search = False
+                construct_list = True
+                max_frontier = len(frontier)
+                
+                child = current_child
+
+                while construct_list == True:  
+                        
+                    parent = parent_dict.get(child)
+                    
+                    if parent == None:
+                        construct_list = False
+                        break                    
+                    movelist.append(parent[1])
+                    child = parent[0]
+                    
+            if search == False:
+                break   
+                    
+            if child_states[i][1] not in explored: 
+                frontier.append(child_states[i][1])
+                explored.add(child_states[i][1])
+                parent_dict[child_states[i][1]] = [parent_state, child_states[i][0]]        
+                    
+        
+        frontier_vector.append(len(frontier))
+        frontier.pop(0)
+        parent_state = frontier[0]
+        child_states = get_successors(parent_state)
+        states_expanded += 1
+        
+        
+    #  return path, path cost, num states expanded, max size of frontier
+    max_frontier = max(frontier_vector)
+    max_frontier = max_frontier - 1
+    states_expanded -= 1
+    path = movelist[::-1]
+    
+    return path, len(path), states_expanded, max_frontier # No solution found
+                               
+     
+def dfs(state):
+    """
+    Depth first search.
+    Returns four values: A path (list of actions), path cost, the number of states expanded,
+    and the maximum size of the frontier.
+    You should also have two mutable data structures:
+    - The frontier of nodes to expand (operating as a queue in BFS)
+    - A set of nodes already expanded
+    """
+    frontier_vector = []
+
+    states_expanded = 0
+    max_frontier = 0
+
+    frontier = []
+    explored = set()
+    #YOUR CODE HERE
+    parent_state = state    
+    states_expanded = 0
+    max_frontier = 0
+
+    search =  True 
+    parent_dict = {}
+    
+    
+    #next_frontier = []
+    
+    child_states = get_successors(parent_state)
+    #print(child_states)
+    
+    frontier.append(state)
+    explored.add(state)
+    j = 0
+    movelist = []
+    while search == True:
+        construct_list = False
+              
+        for i in range(len(child_states)):
+           
+            
+            if goal_test(parent_state) == True:
+                current_child = parent_state
+               
+                search = False
+                construct_list = True
+                
+                
+                child = current_child
+
+                while construct_list == True:  
+                             
+                    parent = parent_dict.get(child)
+                    
+                    if parent == None:
+                        construct_list = False
+                        break                    
+                    movelist.append(parent[1])
+                    child = parent[0]
+                    
+            if search == False:
+                break   
+                    
+            if child_states[i][1] not in explored: 
+                frontier.append(child_states[i][1])
+                explored.add(child_states[i][1])
+                parent_dict[child_states[i][1]] = [parent_state, child_states[i][0]]        
+                    
+                    
+        frontier_vector.append(len(frontier))
+        parent_state = frontier[-1]
+        frontier.pop(-1)
+        
+        child_states = get_successors(parent_state)
+        states_expanded += 1
+        
+        
+    #  return path, path cost, num states expanded, max size of frontier
+    max_frontier = max(frontier_vector)
+    max_frontier = max_frontier - 1
+    states_expanded -= 1
+    path = movelist[::-1]
+    
+    #  return path, path cost, num states expanded, max size of frontier
+    return path, len(path), states_expanded, max_frontier # No solution found
+
+
+def misplaced_heuristic(state):
+    """
+    Returns the number of misplaced tiles.
+    """
+    VAL = 0
+    statelist = list(state)
+    flat_list = statelist[0]+statelist[1]+statelist[2]
+    goal = (0,1,2,3,4,5,6,7,8)
+    
+    for i in range(len(flat_list)):
+        if flat_list[i] != 0 and flat_list[i] !=goal[i]:
+            VAL+=1
+    #YOUR CODE HERE
+    return VAL # replace this
+
+
+def manhattan_heuristic(state):
+    """
+    For each misplaced tile, compute the Manhattan distance between the current
+    position and the goal position. Then return the sum of all distances.
+    """
+    import math
+    statelist = list(state)
+    flatlist = statelist[0]+statelist[1]+statelist[2]
+   
+    val = 0
+    for i,j in enumerate(flatlist):
+        if j!=0:
+            p_r,p_c = int(i/3),i%3
+            g_r,g_c = int(j/3),j%3
+            val += abs(p_r-g_r)+abs(p_c-g_c)
+        
+
+    # YOUR CODE HERE
+    return val # replace this
+
+
+def astar(state, heuristic):
+    """
+    A-star search.
+    Returns four values: A path (list of actions), path cost, the number of states expanded,
+    and the maximum size of the frontier.
+    You should also have two mutable data structures:
+    - The frontier of nodes to expand (operating as a queue in BFS)
+    - A set of nodes already expanded
+    """
+    # Use these modules to maintain a priority queue
+    from heapq import heappush
+    from heapq import heappop
+
+    states_expanded = 0
+    max_frontier = 0
+    
+    frontier_vector = []
+    frontier = []
+    explored = set()
+    #YOUR CODE HERE
+    
+    parent_state = state    
+    states_expanded = 0
+    max_frontier = 0
+
+    search =  True 
+    parent_dict = {}
+    
+    
+    
+    child_states = get_successors(parent_state)
+
+    heappush(frontier,[heuristic(state),0,state])
+    g = 0
+    explored.add(state)
+    j = 0
+    movelist = []
+    construct_list = False
+    states_expanded = 0
+        
+    while search  == True:
+        
+        for i in range(len(child_states)):
+           
+            if goal_test(parent_state) == True:
+                current_child = parent_state
+                
+                search = False
+                construct_list = True
+                
+                child = current_child
+                
+                while construct_list == True:  
+                                   
+                    parent = parent_dict.get(child)
+                    
+                    if parent == None:
+                        construct_list = False
+                        break                    
+                    movelist.append(parent[1])
+                    child = parent[0]
+                    
+            if search == False:
+                break   
+            if frontier == []:
+                break
+        
+            if child_states[i][1] not in explored: 
+                heappush(frontier,[g+heuristic(child_states[i][1]),g,child_states[i][1]])
+                explored.add(child_states[i][1])
+                parent_dict[child_states[i][1]] = [parent_state, child_states[i][0]]        
+                    
+                    
+    
+        
+        frontier_vector.append(len(frontier))
+        parent = heappop(frontier)
+        parent_state = parent[2]
+        g = parent[1]+1
+        child_states = get_successors(parent_state)
+        states_expanded += 1
+        
+    max_frontier = max(frontier_vector)-1
+    
+    #  return path, path cost, num states expanded, max size of frontier
+    states_expanded -= 1
+    path = movelist[::-1]
+
+
+
+    #  return path, path cost, num states expanded, max size of frontier
+    return path, len(path), states_expanded, max_frontier # No solution found
+
+
+def print_result(path_cost, states_expanded, max_frontier):
+    """
+    Helper function to format test output.
+    """
+    print("Cost of path: {}".format(path_cost))
+    print("States expanded: {}".format(states_expanded))
+    print("Max frontier size: {}".format(max_frontier))
+
+
+
+if __name__ == "__main__":
+
+    #Easy test case
+    test_state = ((1, 4, 2),
+                  (0, 5, 8), 
+                  (3, 6, 7))  
+
+
+    
+
+    #More difficult test case
+    #test_state = ((7, 2, 4),
+    #              (5, 0, 6), 
+    #              (8, 3, 1))  
+
+    
+    #print(misplaced_heuristic(test_state))
+    #print(manhattan_heuristic(test_state))
+    print(state_to_string(test_state))
+    print()
+    print("====BFS====")
+    start = time.time()
+    path, path_cost, states_expanded, max_frontier = bfs(test_state)
+    end = time.time()
+    print("Path to goal: {}".format(path))
+    print_result(path_cost, states_expanded, max_frontier)
+    print("Total time: {0:.3f}s".format(end-start))
+
+    print() 
+    print("====DFS====")
+    start = time.time()
+    path, path_cost, states_expanded, max_frontier = dfs(test_state)
+    end = time.time()
+    print_result(path_cost, states_expanded, max_frontier)
+    print("Total time: {0:.3f}s".format(end-start))
+    
+    print() 
+    
+    print("====A* (Misplaced Tiles Heuristic)====") 
+    start = time.time()
+    path, path_cost, states_expanded, max_frontier = astar(test_state, misplaced_heuristic)
+    end = time.time()
+    print("Path to goal: {}".format(path))
+    print_result(path_cost, states_expanded, max_frontier)
+    print("Total time: {0:.3f}s".format(end-start))
+
+    #print() 
+    print("====A* (Total Manhattan Distance Heuristic)====") 
+    start = time.time()
+    path, path_cost, states_expanded, max_frontier = astar(test_state, manhattan_heuristic)
+    end = time.time()
+    print("Path to goal: {}".format(path))
+    print_result(path_cost, states_expanded, max_frontier)
+    print("Total time: {0:.3f}s".format(end-start))
+    
