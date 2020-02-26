@@ -1,0 +1,145 @@
+
+import numpy as np
+
+class HMM(object):
+    """
+    states: List of state values (e.g., strings, integers, etc.)
+    emissions: List of emission values (e.g., strings, integers, etc.)
+    initial: Initial state probability distribution (row vector)
+    tprob: Transition matrix. tprob[i,j] = Pr(X_t = j | X_{t-1} = i)
+    eprob: Emissions matrix. eprob[i,j] = Pr(E_t = j | X_t = i)
+    """
+    def __init__(self, model):
+        self.states = model["states"]
+        self.emissions = model["emissions"]
+        self.initial = np.array(model["initial"])
+        self.tprob = np.array(model["tprob"])
+        self.eprob = np.array(model["eprob"])
+
+
+    """YOUR CODE STARTS HERE"""
+
+    # Forward algorithm for state estimation
+    """
+    Input: List of observation indices
+    Outputs: 2d array, each row is belief distribution P(X_t | e_{1:t})
+    """
+    def forward(self, observations):
+        f0 = self.initial
+        f1_star =f0*self.eprob[:,observations[0]]
+        f1 = f1_star/sum(f1_star)
+        f = np.zeros((len(observations),len(self.states)))
+        f[0,:] = f1
+        
+        for k in range(0,len(observations)-1):
+            
+            if k == 0:
+                f_star = np.dot(f1,self.tprob)
+            else:
+                
+                f_star = np.dot(f[k],self.tprob)
+            
+            
+            f_ = f_star*self.eprob[:,observations[k+1]]
+            f_norm = f_/sum(f_)
+            f[k+1,:] = f_norm
+            
+        return f
+
+
+    # Elapse time for most likely sequence (Viterbi)
+    """
+    Input: Message distribution m_t = max P(x_{1:t-1}, X_t, e_{1:t})
+    Outputs: max P(x_{1:t}, X_{t+1}, e_{1:t}), 
+             list of most likely prior state indices
+    """
+    def propagate_joint(self, m):
+        
+        m_prime = []
+        m_pointers = []
+        
+        
+        for i in range(len(self.tprob[1,:])):
+            m_prime.append(max(m*self.tprob[:,i]))
+            m_pointers.append(np.argmax(m*self.tprob[:,i]))
+            
+       
+        
+        return m_prime, m_pointers
+
+
+    # Viterbi algorithm for state sequence estimation
+    """
+    Input: List of observation indices
+    Outputs: List of most likely sequence of state indices
+    """
+    def viterbi(self, observations):
+        m0 = self.initial
+        
+        m1_star = m0*self.eprob[:,observations[0]]
+
+        m1 = m1_star/sum(m1_star)
+        
+        #m = np.zeros((len(observations),3))
+        m_ind = np.zeros((len(observations),len(self.states)))
+        
+        m_ind[0,:] = 0
+        
+        path = []
+        for k in range(0,len(observations)-1):
+            if k == 0:
+            
+                m_star,inds = self.propagate_joint(m1)
+            else:
+                
+                m_star,inds = self.propagate_joint(m_norm)
+            
+            
+            m_ = m_star*self.eprob[:,observations[k+1]]
+            
+            m_norm = m_/sum(m_)
+    
+            m_ind[k,:] = inds
+            
+        for k in range(0,len(observations)):
+            if k == 0:
+                path.append(np.argmax(m_norm))
+            else:
+                
+                path_ = m_ind[-1-k,path[-1]]
+                path.append(int(path_))
+        
+        path = list(reversed(path))
+        
+        return path
+
+
+    # Backward pass for computing likelihood of future evidence given current state
+    """
+    Input: List of observations indices
+    Output: 2d array, each row is likelihood P(e_{k+1:T} | X_k)
+    """
+    def backward(self, observations):
+                
+        b_k_1 = [1, 1, 1]
+        b_matrix = np.zeros((len(observations),len(self.states)))
+        b_matrix[-1,:]=b_k_1
+        
+        for k in range(1, len(observations)):
+            b = b_k_1*self.eprob[:,observations[-k]]
+            b_k = np.dot(b,np.transpose(self.tprob))
+            b_k = b_k/sum(b_k)
+            b_matrix[-1-k,:] = b_k
+            b_k_1 = b_k
+
+        
+        
+        return b_matrix
+
+    """YOUR CODE STOPS HERE"""
+
+    def smooth(self, observations):
+        forward = self.forward(observations)
+        backward = self.backward(observations)
+        smoothed = np.multiply(forward, backward)
+        return smoothed / np.linalg.norm(smoothed, ord=1, axis=1).reshape(len(observations),1)
