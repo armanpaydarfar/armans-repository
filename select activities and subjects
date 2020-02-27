@@ -1,0 +1,93 @@
+import numpy as np
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+os.chdir('drive')
+os.chdir('My Drive')
+os.chdir('shoe')
+!pwd
+
+import pickle
+ori_data = []
+for i in range(12):
+ with open('data/master_data_label_'+str(i)+'.p', 'rb') as f:
+   file = pickle.load(f)
+   ori_data.append(file)
+
+# samples = number of sample selected from each object and activities
+num_samples = 100
+# for par_id = 004 to 020
+num_obj = 17
+wrong_str_list = []
+
+data = np.zeros((num_obj, 12, num_samples, 50, 6))
+label = np.zeros((num_obj, 12, num_samples))
+
+# for par_id = 004 to 020
+''' should be modified with par_id'''
+for d in range(4,21):
+ for a in range(12):
+   # each acticity
+   if d<10:
+     acti = ori_data[a][('PAR_00' + str(d), a)]
+   else:
+     acti = ori_data[a][('PAR_0' + str(d), a)]
+   # generate (number of samples) random index
+   index = np.random.randint(0, len(acti), size = num_samples)
+   ''' should be modified with par_id'''
+   label[(d-4), a] = a * np.ones(num_samples)
+   for s in range(num_samples):
+     # r0, r1, ones is left foot, one is right foot, not sure of the order
+     r0 = acti[index[s]][0][0].to_numpy()
+     r1 = acti[index[s]][1][0].to_numpy()
+     for t in range(50):
+       # left foot and right foot, not sure of the order
+       # r[t] is a string like '[ 929 1805 1464]'
+       # change the string to value
+       # from str pair e.g.('[1237  993 1321]') to array([1237.,  993., 1321.])         
+       c = np.zeros((6,))
+       if len(r0[t])==13 and len(r1[t])==16:
+         c[0] = int(r0[t][1:4])
+         c[1] = int((r0[t][4:8]))
+         c[2] = int((r0[t][8:12]))
+         c[3] = int(r1[t][1:5])
+         c[4] = int((r1[t][5:10]))
+         c[5] = int((r1[t][10:15]))
+         '''should be modified if par_id changed'''
+         data[(d-4), a, s, t] = c
+       elif len(r0[t])==16 and len(r1[t])==13:
+         c[0] = int(r0[t][1:5])
+         c[1] = int((r0[t][5:10]))
+         c[2] = int((r0[t][10:15]))
+         c[3] = int(r1[t][1:4])
+         c[4] = int((r1[t][4:8]))
+         c[5] = int((r1[t][8:12]))
+         data[(d-4), a, s, t] = c
+       elif len(r0[t])==13 and len(r1[t])==13:
+         c[0] = int(r0[t][1:4])
+         c[1] = int((r0[t][4:8]))
+         c[2] = int((r0[t][8:12]))
+         c[3] = int(r1[t][1:4])
+         c[4] = int((r1[t][4:8]))
+         c[5] = int((r1[t][8:12]))
+         data[(d-4), a, s, t] = c
+       elif len(r0[t])==16 and len(r1[t])==16:
+         c[0] = int(r0[t][1:5])
+         c[1] = int((r0[t][5:10]))
+         c[2] = int((r0[t][10:15]))
+         c[3] = int(r1[t][1:5])
+         c[4] = int((r1[t][5:10]))
+         c[5] = int((r1[t][10:15]))
+         data[(d-4), a, s, t] = c       
+       else:
+         wrong_str_list.append((a, index[s], t))
+         print(r0[t],len(r0[t]),r1[t],len(r1[t]))
+
+# np.save('data_num_sample_50', data)
+# np.save('label_num_sample_50', label)
+
+#  save data and label as .npy file (np.array)
+np.save('data',data)
+np.save('label',label)
